@@ -84,4 +84,24 @@ describe("dispatchSingleCall", () => {
     expect(writes.some((w) => w.table === "calls" && w.op === "insert")).toBe(true);
     expect(provider.startCall).toHaveBeenCalled();
   });
+
+  it("passes the lead's first name in metadata for personalized greeting", async () => {
+    const { client } = makeSb({
+      lead: { id: "L", tenant_id: "T", name: "Ravi Kumar", phone_e164: "+91900", status: "new" },
+    });
+    const provider = { startCall: vi.fn().mockResolvedValue({ providerCallId: "c_1" }) } as any;
+    await dispatchSingleCall(client, provider, { leadId: "L" });
+    const args = provider.startCall.mock.calls[0]![0];
+    expect(args.metadata.lead_first_name).toBe("Ravi");
+  });
+
+  it("omits placeholder names (Unknown / NA / one-letter) from metadata", async () => {
+    const { client } = makeSb({
+      lead: { id: "L", tenant_id: "T", name: "Unknown", phone_e164: "+91900", status: "new" },
+    });
+    const provider = { startCall: vi.fn().mockResolvedValue({ providerCallId: "c_1" }) } as any;
+    await dispatchSingleCall(client, provider, { leadId: "L" });
+    const args = provider.startCall.mock.calls[0]![0];
+    expect(args.metadata.lead_first_name).toBe("");
+  });
 });

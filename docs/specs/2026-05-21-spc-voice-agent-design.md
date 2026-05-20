@@ -299,8 +299,12 @@ The `tenant_id` claim is set during sign-in via a Supabase Auth Hook that reads 
 - Voice: stock voice from Sarvam Bulbul gallery to be selected during M3.
 - Demeanor: warm, never pushy, uses small fillers ("right", "okay", "achha"), respects "no" instantly.
 
-### 9.2 The 8-step flow (≤120s hard cap)
-1. **Intro (5s)** — "Namaste, I'm Priya from Supreme Petrochemicals, Chennai. Is this a good time for a quick 30-second conversation?"
+### 9.2 The 8-step flow (≤3-minute hard cap)
+1. **Intro (5s)** — Personalized greeting using the lead's first name (passed via `campaigns-worker` metadata):
+   - EN: "Hello Ravi, this is Priya from Supreme Petrochemicals, Chennai. Is this a good time for a quick 30-second conversation?"
+   - HI: "Namaste Ravi ji, main Priya hoon Supreme Petrochemicals Chennai se. Kya aap 30 second baat kar sakte hain?"
+   - TA: "Vanakkam Ravi avargale, naan Priya, Supreme Petrochemicals Chennai-il irundhu. Ungalukku oru nimisham nerum unda?"
+   - Fallback (name unavailable/placeholder): omit the name and start with "Namaste, this is Priya from Supreme Petrochemicals..."
 2. **Right person?** — Procurement decision-maker?
 3. **Industry fit** — What does the company manufacture? Maps to SPC's 18 sectors.
 4. **Need fit** — Which chemicals do they currently source? Cross-checks SPC's 250-product catalogue.

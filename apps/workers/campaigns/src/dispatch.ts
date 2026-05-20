@@ -29,6 +29,15 @@ export async function dispatchSingleCall(
 
   await sb.from("leads").update({ status: "queued" }).eq("id", lead.id);
 
+  // Extract first name for personalized greeting. Indian lead names are
+  // often "First Last" or "First Middle Last"; we take only the first
+  // token, trimmed, and reject if it's clearly a placeholder.
+  const firstNameRaw = (lead.name ?? "").trim().split(/\s+/)[0] ?? "";
+  const firstName =
+    firstNameRaw.length >= 2 && !/^(unknown|n\/?a|test|na)$/i.test(firstNameRaw)
+      ? firstNameRaw
+      : "";
+
   const { providerCallId } = await provider.startCall({
     agentId: tenant.samvaad_agent_id,
     to_e164: lead.phone_e164,
@@ -38,7 +47,9 @@ export async function dispatchSingleCall(
       lead_id: lead.id,
       tenant_id: lead.tenant_id,
       campaign_id: args.campaignId,
-    },
+      lead_first_name: firstName,
+      lead_company: lead.company ?? "",
+    } as any,
   });
 
   await sb.from("calls").insert({

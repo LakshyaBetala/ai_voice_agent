@@ -47,4 +47,8 @@ field you return.
 
 Be conservative. If the transcript is too short or unclear,
 classification = cold, score <= 25, reason = "insufficient signal".
-Always populate summary and next_action even on cold.`;
+Always populate summary and next_action even on cold.
+
+The agent is expected to greet the lead by first name in the first turn.
+If the lead immediately corrects the name or says it's the wrong number,
+emit call_quality_flags: ["wrong_number"] and classification: "cold".`;
