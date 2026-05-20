@@ -11,7 +11,9 @@
       "Bash(git init *)",
       "Bash(pnpm install *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git config *)",
+      "Bash(pnpm --filter @ai-voice/shared test)"
     ]
   }
 }
