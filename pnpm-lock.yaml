@@ -21,6 +21,100 @@ importers:
         specifier: ^2.0.5
         version: 2.1.9(@types/node@20.19.41)
 
+  apps/workers/campaigns:
+    dependencies:
+      '@ai-voice/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      '@supabase/supabase-js':
+        specifier: ^2.45.0
+        version: 2.106.1
+      hono:
+        specifier: ^4.5.0
+        version: 4.12.21
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20240909.0
+        version: 4.20260520.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.5
+        version: 2.1.9(@types/node@20.19.41)
+      wrangler:
+        specifier: ^3.78.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260520.1)
+
+  apps/workers/clicktocall:
+    dependencies:
+      '@supabase/supabase-js':
+        specifier: ^2.45.0
+        version: 2.106.1
+      hono:
+        specifier: ^4.5.0
+        version: 4.12.21
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20240909.0
+        version: 4.20260520.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.5
+        version: 2.1.9(@types/node@20.19.41)
+      wrangler:
+        specifier: ^3.78.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260520.1)
+
+  apps/workers/handoff:
+    dependencies:
+      '@supabase/supabase-js':
+        specifier: ^2.45.0
+        version: 2.106.1
+      hono:
+        specifier: ^4.5.0
+        version: 4.12.21
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20240909.0
+        version: 4.20260520.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.5
+        version: 2.1.9(@types/node@20.19.41)
+      wrangler:
+        specifier: ^3.78.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260520.1)
+
+  apps/workers/score:
+    dependencies:
+      '@ai-voice/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
+      '@supabase/supabase-js':
+        specifier: ^2.45.0
+        version: 2.106.1
+      hono:
+        specifier: ^4.5.0
+        version: 4.12.21
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20240909.0
+        version: 4.20260520.1
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+      vitest:
+        specifier: ^2.0.5
+        version: 2.1.9(@types/node@20.19.41)
+      wrangler:
+        specifier: ^3.78.0
+        version: 3.114.17(@cloudflare/workers-types@4.20260520.1)
+
   apps/workers/webhooks:
     dependencies:
       '@ai-voice/shared':

@@ -16,7 +16,9 @@
       "Bash(pnpm --filter @ai-voice/shared test)",
       "Bash(pnpm --filter @ai-voice/shared add papaparse)",
       "Bash(pnpm --filter @ai-voice/shared add -D @types/papaparse)",
-      "Bash(pnpm --filter @ai-voice/shared add zod)"
+      "Bash(pnpm --filter @ai-voice/shared add zod)",
+      "Bash(pnpm --filter @ai-voice/webhooks-worker test)",
+      "Bash(pnpm -r test)"
     ]
   }
 }
