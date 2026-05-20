@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.supremepetrochemicals.com)",
+      "WebFetch(domain:www.sarvam.ai)",
+      "WebSearch",
+      "WebFetch(domain:docs.sarvam.ai)",
+      "Bash(git --version)",
+      "Bash(pnpm --version)",
+      "Bash(npm install *)",
+      "Bash(git init *)",
+      "Bash(pnpm install *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
