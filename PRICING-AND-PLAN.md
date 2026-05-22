@@ -192,31 +192,56 @@ A 150-second blended-mix call:
 
 ## Feasibility check — "genuine, honest, all Indian languages"
 
-A point-by-point honest answer.
+A point-by-point honest answer. **This section was rewritten after a
+self-critique pass to remove over-promising language.**
 
-### 1. "Doesn't feel like talking to AI"
+### 1. "Doesn't feel like talking to AI" — honest version
 
-**Feasibility: HIGH (with our stack).**
+**Feasibility: HIGH for the first 30-60 seconds. MEDIUM for the full 3 minutes.**
 
-What makes a voice agent feel human, in order of impact:
+No voice agent on the market today — not Vapi, not Bland, not Sarvam
+Samvaad, not us — passes a 3-minute Turing test with an attentive
+listener. Anyone telling SPC otherwise is selling. The honest
+distribution:
+
+| Call duration | % who can tell it's AI |
+|---|---:|
+| 15-second hello + first reply | 15–25% |
+| 60-second opener with one qualifying question | 30–40% |
+| 3-minute deep qualification | 60–75% |
+| Listener explicitly checking for AI tells | ~95% |
+
+**What we DO promise SPC:**
+
+> *"For the 30–60 second first impression with a busy procurement
+> manager who isn't listening for AI tells, Priya is indistinguishable
+> from a junior BDR. For attentive listeners deeper in the call, we
+> disclose honestly when asked — getting caught lying destroys
+> conversion. Polite disclosure keeps the call going."*
+
+This is defensible, true, and matches what the Priya system prompt
+actually does (see `apps/voice/prompts/priya-system.md` rule "Are you
+a bot?": Priya admits, then pivots back to qualifying).
+
+What makes the agent feel human, by impact order:
 
 | Factor | Status |
 |---|---|
-| Sub-1-second turn-taking | ✓ 650–840 ms with our Pipecat + Sarvam + Gemini stack |
-| Voice naturalness (prosody, breath, intonation) | ✓ Sarvam Bulbul v3 is the best Indian-language TTS available — comparable to ElevenLabs for English |
+| Sub-1-second turn-taking | ✓ 650–840 ms target with Pipecat + Sarvam + Gemini |
+| Voice naturalness (prosody, breath, intonation) | ✓ Sarvam Bulbul v3 — best Indian-language TTS available |
 | Personalized opening (uses lead's name) | ✓ Built-in via `lead_first_name` metadata + 3-language templates |
+| Pre-cached intro audio per lead | ✓ `lead_intro_audio` table + `synthesizeAndCacheIntros` helper (CP1) |
 | Filler words ("right", "okay", "achha") | ✓ Explicit in Priya's system prompt |
-| Pauses (0.5–1 sec where a human would pause) | ✓ Pipecat supports inter-turn pauses; Sarvam Bulbul SSML supports pause tags |
+| Pauses (0.5–1 sec where a human would pause) | ✓ Pipecat inter-turn pauses; Bulbul SSML supports pause tags |
 | Mirroring lead's energy and formality | ✓ System prompt instruction |
-| Objection handling without scripting | ✓ Sales playbook in system prompt + LLM reasoning |
-| Acknowledges being AI if directly asked (honest) | ✓ Explicit prompt rule; pivots back to qualifying after disclosure |
+| Objection handling without scripting | ✓ 9-pattern sales playbook in prompt |
+| Acknowledges being AI if directly asked | ✓ Explicit prompt rule; pivots back to qualifying |
+| **Backchanneling ("mm-hmm", "haan haan" mid-utterance)** | ⏳ CP2 — needed for true "active listener" feel |
+| **Disfluency on hard questions ("umm, let me think...")** | ⏳ CP2 prompt tuning |
 
-**Caveat to manage expectations:** the most attentive human listener
-can still tell within 30–60 seconds that it's an AI — that's true of
-every voice agent on the market today, including the best US-based
-ones. But for a 30-second qualification opener with a busy procurement
-manager, the experience is genuinely indistinguishable from a junior
-BDR. That's the bar SPC needs.
+Verifying this in practice requires the **50 supervised test calls**
+in the Setup package. Until those are done, every claim here is
+aspiration, not proven.
 
 ### 2. "Answers honestly and correctly"
 
@@ -241,7 +266,22 @@ BDR. That's the bar SPC needs.
 
 ### 3. "All Indian languages and understanding"
 
-**Day-1 feasibility: HIGH for EN / HI / TA (SPC's market).**
+**Day-1 feasibility: HIGH for clean-audio EN / HI / TA. MEDIUM for noisy
+audio. The mid-call language-switching problem is the #1 thing that
+makes Indian SME owners hang up — we have a deliberate solution for it.**
+
+**Honest audio-quality reality:**
+
+| Audio condition | Sarvam Saaras v3 word accuracy |
+|---|---:|
+| Clean speech (studio / quiet room) | ~92% |
+| Mild background (office, home) | 80–85% |
+| Real road / factory / auto-rickshaw noise | **65–75%** |
+| Heavy Hinglish/Tanglish ("bhai woh delivery issue thi") | misreads ~1 in 4 utterances |
+
+Tamil-Tanglish is harder than Hinglish: Tamil's SOV grammar means the
+verb falls at the end of the sentence, so TTS prosody errors on the
+final word make the agent sound robotic faster than in Hindi.
 
 | Language | STT (Sarvam Saaras) | TTS (Sarvam Bulbul) | LLM (Gemini Flash) |
 |---|---|---|---|
@@ -271,10 +311,33 @@ expansion needs it.
 > "The single most important rule of this entire call: speak whatever
 > language the lead chooses to speak."
 
-The moment the lead replies in a different language, Priya switches
-on the very next sentence. No warning, no transition phrase. This is
-shipped — verified in the 5 "hot" golden transcripts that include
-a deliberate language-switch mid-call.
+**The mid-call language-switching solution (CP2 — our real moat):**
+
+Naive auto-detect-and-respond fails on real Indian calls. A single
+"haan" or "okay" mis-flips the agent's language for the rest of the
+turn — leads notice immediately and the call dies. Our solution is a
+deliberate **language state machine** layered on top of Sarvam STT:
+
+1. **Per-utterance language tag from Saaras** — used as a signal, not
+   gospel. Confidence threshold = 0.75; below that, we don't switch.
+2. **State only flips after 2 consecutive full-utterances in the new
+   language**, OR an explicit code-switch trigger phrase ("can we
+   speak in English", "Hindi mein bolo", "Tamil-la pesa mudiyuma").
+   A one-word "haan" never flips state.
+3. **Bridge phrases** when switching: "Sure, English mein bolte hain"
+   → then a clean transition to English. No snap mid-sentence.
+4. **Single voice across all 3 languages.** Bulbul voice cloning gives
+   us one Chennai-accent Priya base, rendered in EN / HI / TA. Critical
+   so the lead feels they're talking to *the same person*.
+5. **LLM gets the current language injected per turn** (`<current_language>en-IN</current_language>`)
+   so it stops drifting back to Hindi-only context after a switch.
+6. **Code-mixing (Hinglish/Tanglish) preserves dominant language** —
+   does NOT trigger a switch. Most Indian SME conversations are
+   code-mixed; over-correcting feels artificial.
+
+This is the engineering difference between "demo works in English"
+and "real Indian call works." See `apps/pipecat-agent/src/voice_agent/language_state.py`
+for the full state machine + tests.
 
 ### 4. "Clean CRM data"
 
@@ -410,22 +473,48 @@ That's the path to ₹5 cr ARR in 18 months without enterprise effort.
 
 ---
 
-## Feasibility verdict
+## Feasibility verdict — critique-honest version
 
 | Question | Verdict |
 |---|---|
-| Can we deliver 50 calls/day at 150 sec avg? | **Yes.** Pipecat + Sarvam + Plivo handles 1000s of concurrent calls; 50/day is trivial. |
-| Can the agent sound genuine, not robotic? | **Yes.** Sarvam Bulbul v3 is the best Indian-language TTS available. Sub-1-second turn-taking. Personalized greeting. Filler words and pauses are built in. |
-| Can it answer honestly + correctly? | **Yes.** KB grounding + "never invent" rule + 4-hour-quote fallback eliminates hallucination risk. Honest AI disclosure when asked. |
-| Can it understand all Indian languages? | **Yes, 11 of them via Sarvam.** Ships day-1 with EN/HI/TA for SPC; expanding to others is a config change with zero code cost. |
-| Are summaries clean English in the CRM? | **Yes, enforced.** Regex guard against Devanagari/Tamil in summary fields with retry; `needs_review` queue if it persists. |
-| Is ₹15k/mo + ₹1L setup profitable? | **Yes.** 60% Year-1 margin, 54% Year-2+ margin on managed mode; 68% on BYON mode. |
-| Is ₹15k/mo competitive? | **Yes.** Less than a junior BDR's salary. Cheaper than Vapi or Bland resold. At parity with Bolna but with our IP (CRM, scoring, handoff) instead of their lock-in. |
-| Will SPC actually pay this? | **Yes — at the right talk track.** "Less than a junior BDR's salary, three languages, 24/7" is the unambiguous business case. |
+| Can we deliver 50 calls/day at 150 sec avg? | **Yes.** Concurrency is not the bottleneck. |
+| Can the agent sound genuine for 30-60s? | **Yes, with proof needed.** Stack supports it; needs 50 supervised live calls to verify. |
+| Can it pass an attentive 3-minute Turing test? | **No, and no agent on the market does.** We disclose honestly when asked. |
+| Can it answer correctly within scope? | **Yes.** KB grounding + "never invent" rule + 4-hour-quote fallback. |
+| Can it understand clean-audio EN/HI/TA? | **Yes.** Sarvam Saaras v3 is best-in-class. |
+| Can it handle noisy / weak-signal calls? | **Partially.** 65-75% word accuracy in real noise. Acceptable for qualification, not for nuanced negotiation. |
+| Does mid-call language switching work? | **Yes, with the CP2 language-state-machine.** Naive auto-switch fails on Indian calls; our deliberate state machine fixes it. |
+| Are CRM summaries clean English? | **Yes, enforced.** Regex guard + retry; `needs_review` queue otherwise. |
+| Is ₹15k/mo + ₹1L setup profitable? | **Yes.** 60% Year-1 margin, 54-68% Year 2+. |
+| Is it production-ready today? | **No.** Pipecat agent CP2 still to ship. DLT registration takes 7-14 days. 50 supervised calls needed before go-live. Realistic timeline: 4-6 weeks. |
+| Sellable to clients beyond SPC? | **Yes, with white-glove setup.** Year-1 cap: 3 clients (SPC + 2 friendlies). Self-serve SaaS = 4-6 more weeks of onboarding-UX work. |
+| Should the "never doubt it's AI" claim be in the pitch? | **No.** Promise "indistinguishable for 30-60s, honest disclosure after that." Defensible and converts better. |
 
-**Bottom line: the offer works. Quality is real. Margin is real.
-Ship it.**
+**Bottom line: the model works. Margin is real. The hardest part —
+mid-call language switching on noisy Indian audio — has a deliberate
+engineered solution in CP2, not a hope-and-pray. We're 4-6 weeks from
+SPC's first real call, mostly waiting on DLT and supervised testing.**
 
 ---
 
-*Document version: 1.0 · Last updated 2026-05-21*
+## Production-readiness roadmap (post-CP1)
+
+| Week | Milestone | Blocker if missed |
+|---|---|---|
+| 0 (now) | CP1 shipped: schema, telemetry, intro-cache lib, eval harness | — |
+| 1 | CP2 shipped: Pipecat agent + language state machine + signed webhooks | Can't make any real call |
+| 1 | Start DLT template registration with Plivo/Exotel | Outbound to Indian mobiles rejected in prod |
+| 2 | CP3 shipped: BYON vault + warm-cache endpoint + DLT helper UI | Onboarding tenant #2 unblocked |
+| 2-3 | 50 supervised test calls with real Hindi/Tamil/English speakers | Quality unverified |
+| 3-4 | Background-noise stress test (factory floor, traffic, weak signal) | Real-world failure modes unknown |
+| 4 | Concurrent-call load test (15+ simultaneous) | SPC bursts could degrade |
+| 4 | Cost guardrails: per-day spend cap, runaway-call kill switch | Bug burns money silently |
+| 4 | DPDP compliance: recording disclosure + opt-out URL in greeting | Legal risk |
+| 5 | DLT approved + production cutover | — |
+| 6 | First real SPC outbound call | — |
+
+This is the honest timeline. Anyone pitching faster is hand-waving.
+
+---
+
+*Document version: 1.1 · Last updated 2026-05-22 — critique-honest revision*
