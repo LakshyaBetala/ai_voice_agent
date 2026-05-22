@@ -12,6 +12,13 @@ const Schema = z.object({
   telephony_mode: z.enum(["managed", "byon"]),
   byon_provider: z.enum(["exotel", "plivo", "tata"]).optional().nullable(),
   byon_from_number: z.string().optional().nullable(),
+  // CP3 billing fields
+  monthly_unit_allowance: z.coerce.number().int().min(0).max(1_000_000).optional(),
+  wiggle_room_pct: z.coerce.number().int().min(0).max(50).optional(),
+  overage_rate_inr: z.coerce.number().min(0).max(1000).optional(),
+  daily_spend_cap_inr: z.coerce.number().min(0).max(1_000_000).optional(),
+  avg_order_size_inr: z.coerce.number().min(0).max(100_000_000).optional(),
+  overage_policy: z.enum(["continue_billed", "hard_pause"]).optional(),
 });
 
 export async function updateTenantSettingsAction(fd: FormData) {
@@ -24,6 +31,12 @@ export async function updateTenantSettingsAction(fd: FormData) {
     telephony_mode: fd.get("telephony_mode") || "managed",
     byon_provider: fd.get("byon_provider") || null,
     byon_from_number: fd.get("byon_from_number") || null,
+    monthly_unit_allowance: fd.get("monthly_unit_allowance") || undefined,
+    wiggle_room_pct: fd.get("wiggle_room_pct") || undefined,
+    overage_rate_inr: fd.get("overage_rate_inr") || undefined,
+    daily_spend_cap_inr: fd.get("daily_spend_cap_inr") || undefined,
+    avg_order_size_inr: fd.get("avg_order_size_inr") || undefined,
+    overage_policy: fd.get("overage_policy") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]!.message };
   if (

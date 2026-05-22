@@ -1,5 +1,6 @@
 import { requireTenant } from "@/lib/auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { fetchBillingSummary } from "@/lib/billing";
 import { LeadsTable } from "@/components/LeadsTable";
 import { CsvUploadDialog } from "@/components/CsvUpload";
 import { ManualLeadDialog } from "@/components/ManualLeadDialog";
@@ -9,11 +10,10 @@ import { NavBar } from "@/components/NavBar";
 export default async function LeadsPage() {
   const { tenantId } = await requireTenant();
   const supabase = createSupabaseServerClient();
-  const { data: tenant } = await supabase
-    .from("tenants")
-    .select("name")
-    .eq("id", tenantId)
-    .single();
+  const [{ data: tenant }, billing] = await Promise.all([
+    supabase.from("tenants").select("name").eq("id", tenantId).single(),
+    fetchBillingSummary(tenantId),
+  ]);
   const { data: leads, error } = await supabase
     .from("leads")
     .select(
@@ -24,7 +24,12 @@ export default async function LeadsPage() {
 
   return (
     <>
-      <NavBar tenantName={tenant?.name ?? "—"} />
+      <NavBar
+        tenantName={tenant?.name ?? "—"}
+        unitsUsed={billing.unitsUsed}
+        unitsAllowance={billing.unitsAllowance}
+        wigglePct={billing.wigglePct}
+      />
       <main className="mx-auto max-w-6xl space-y-6 p-6">
         <LeadsRealtimeRefresher />
         <header className="flex items-center justify-between">

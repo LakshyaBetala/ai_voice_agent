@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { VoiceProvider } from "@ai-voice/shared";
 
+// Projected cost of a single 180s "unit" call. Mirrors
+// apps/pipecat-agent/src/voice_agent/cost_guard.py:project_next_call_cost_inr().
+// Pessimistic — used for the daily-cap admission check before dial.
+const PROJECTED_UNIT_COST_INR = 12.0;
+
 export async function dispatchSingleCall(
   sb: SupabaseClient,
   provider: VoiceProvider,
@@ -13,7 +18,7 @@ export async function dispatchSingleCall(
   const { data: tenant } = await sb
     .from("tenants")
     .select(
-      "samvaad_agent_id,exotel_caller_id,persona_lang_default,agent_enabled,telephony_mode,byon_provider,byon_from_number",
+      "samvaad_agent_id,exotel_caller_id,persona_lang_default,agent_enabled,telephony_mode,byon_provider,byon_from_number,daily_spend_cap_inr",
     )
     .eq("id", lead.tenant_id)
     .single();
@@ -22,6 +27,19 @@ export async function dispatchSingleCall(
   }
   if (tenant.agent_enabled === false) {
     throw new Error("agent_disabled");
+  }
+
+  // Cost guardrail: refuse to dispatch if today's projected cost would
+  // exceed the tenant's daily spend cap. tenant_spend_today() is the SQL
+  // helper from migration 20260522180200_tenant_overage.sql.
+  if (typeof tenant.daily_spend_cap_inr === "number" && tenant.daily_spend_cap_inr > 0) {
+    const { data: spendRow } = await sb.rpc("tenant_spend_today", {
+      p_tenant_id: lead.tenant_id,
+    });
+    const spentToday = typeof spendRow === "number" ? spendRow : Number(spendRow ?? 0);
+    if (spentToday + PROJECTED_UNIT_COST_INR > tenant.daily_spend_cap_inr) {
+      throw new Error("daily_cap_reached");
+    }
   }
   const fromNumber =
     tenant.telephony_mode === "byon"

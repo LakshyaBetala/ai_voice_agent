@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { requireTenant } from "@/lib/auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { fetchBillingSummary } from "@/lib/billing";
 import { LeadStatusBadge } from "@/components/LeadStatusBadge";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { SummaryCard } from "@/components/SummaryCard";
@@ -10,6 +11,7 @@ import { DncDialog } from "@/components/DncDialog";
 import { StartAiCallButton } from "@/components/StartAiCallButton";
 import { CallNowButton } from "@/components/CallNowButton";
 import { NavBar } from "@/components/NavBar";
+import { QualificationPanel } from "@/components/QualificationPanel";
 
 export default async function LeadDetail({
   params,
@@ -18,11 +20,10 @@ export default async function LeadDetail({
 }) {
   const { tenantId } = await requireTenant();
   const supabase = createSupabaseServerClient();
-  const { data: tenant } = await supabase
-    .from("tenants")
-    .select("name")
-    .eq("id", tenantId)
-    .single();
+  const [{ data: tenant }, billing] = await Promise.all([
+    supabase.from("tenants").select("name").eq("id", tenantId).single(),
+    fetchBillingSummary(tenantId),
+  ]);
   const { data: lead } = await supabase
     .from("leads")
     .select("*")
@@ -30,17 +31,31 @@ export default async function LeadDetail({
     .single();
   if (!lead) notFound();
 
-  const { data: latestScore } = await supabase
-    .from("lead_scores")
-    .select("*")
-    .eq("lead_id", lead.id)
-    .order("scored_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const [{ data: latestScore }, { data: latestSlots }] = await Promise.all([
+    supabase
+      .from("lead_scores")
+      .select("*")
+      .eq("lead_id", lead.id)
+      .order("scored_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("qualification_slots")
+      .select("*")
+      .eq("lead_id", lead.id)
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
   return (
     <>
-      <NavBar tenantName={tenant?.name ?? "—"} />
+      <NavBar
+        tenantName={tenant?.name ?? "—"}
+        unitsUsed={billing.unitsUsed}
+        unitsAllowance={billing.unitsAllowance}
+        wigglePct={billing.wigglePct}
+      />
       <main className="mx-auto max-w-4xl space-y-6 p-6">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -86,6 +101,11 @@ export default async function LeadDetail({
               the call ending.
             </p>
           )}
+        </section>
+
+        <section className="rounded-md border p-4">
+          <h2 className="mb-4 text-sm font-medium">Live qualification</h2>
+          <QualificationPanel slots={(latestSlots as any) ?? null} />
         </section>
 
         <section className="rounded-md border p-4">

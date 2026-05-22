@@ -76,8 +76,57 @@ def test_soft_close_and_hard_stop_thresholds():
     assert ctx.should_hard_stop() is True
 
 
-def test_hard_cap_is_180_seconds_per_contract():
-    """The 180s cap is a contractual SPC constraint, not a tunable.
+def test_hard_cap_is_360_seconds_per_dual_billing_model():
+    """360s hard cap supports CP3 dual-billing: 0-180s = 1 unit, 181-360s = 2 units.
+    A converting conversation rolls into a billed second unit instead of being cut.
     If this changes, update priya-system.md AND PRICING-AND-PLAN.md."""
-    assert HARD_CAP_SECONDS == 180
+    assert HARD_CAP_SECONDS == 360
+    # SOFT_CLOSE_SECONDS is the legacy alias for SOFT_CLOSE_1_SECONDS (170s).
     assert SOFT_CLOSE_SECONDS == 170
+
+
+def test_billed_units_match_dual_billing_model():
+    """0-180s = 1 unit, 181-360s = 2 units. Verifies the in-process mirror
+    of the DB trigger in 20260522180100_billed_units.sql."""
+    import time as _t
+    from voice_agent.pipeline import make_initial_context
+
+    ctx = make_initial_context(
+        call_id="c1", tenant_id="t1", lead_id="L1",
+        lead_first_name=None, lead_company=None, default_lang="en-IN",
+    )
+    # 100s elapsed → 1 unit
+    ctx.started_at_monotonic = _t.monotonic() - 100
+    assert ctx.billed_units() == 1
+
+    # Just under 180s → still 1 unit (DB CHECK uses integer duration_sec)
+    ctx.started_at_monotonic = _t.monotonic() - 179
+    assert ctx.billed_units() == 1
+
+    # Just past 180s → 2 units
+    ctx.started_at_monotonic = _t.monotonic() - 200
+    assert ctx.billed_units() == 2
+
+    # At hard cap → still 2 (the cap is the ceiling)
+    ctx.started_at_monotonic = _t.monotonic() - 360
+    assert ctx.billed_units() == 2
+
+
+def test_two_stage_soft_close():
+    """170s and 350s soft-closes are distinct; only the final one means 'wrap NOW'."""
+    import time as _t
+    from voice_agent.pipeline import make_initial_context, SOFT_CLOSE_1_SECONDS, SOFT_CLOSE_2_SECONDS
+
+    ctx = make_initial_context(
+        call_id="c1", tenant_id="t1", lead_id="L1",
+        lead_first_name=None, lead_company=None, default_lang="en-IN",
+    )
+    ctx.started_at_monotonic = _t.monotonic() - (SOFT_CLOSE_1_SECONDS + 1)
+    assert ctx.should_soft_close() is True
+    assert ctx.should_soft_close_final() is False
+    assert ctx.should_hard_stop() is False
+
+    ctx.started_at_monotonic = _t.monotonic() - (SOFT_CLOSE_2_SECONDS + 1)
+    assert ctx.should_soft_close() is True
+    assert ctx.should_soft_close_final() is True
+    assert ctx.should_hard_stop() is False

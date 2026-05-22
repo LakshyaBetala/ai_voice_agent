@@ -26,21 +26,29 @@ To smoke-test the assembly in staging:
     python -m voice_agent.pipeline
 
 Hard limits enforced here:
-  - 180s total call duration cap
-  - 170s soft-close warning to the LLM ("wrap with goodbye now")
+  - 360s total call duration cap (was 180s in CP2; CP3 bumped to allow EXTENSION)
+  - 170s first soft-close (LLM nudged to wrap unless buying_confidence high)
+  - 350s second soft-close (final wrap warning before hard stop)
+  - Calls 0-180s bill as 1 unit; 181-360s as 2 units. Trigger in DB.
 """
 from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .conversation_state import ConversationState
 from .language_state import Lang, LanguageState
 from .prompts import build_intro_text, build_system_message, load_priya_prompt
 
-# Hard caps from priya-system.md / SPC contract.
-HARD_CAP_SECONDS = 180
-SOFT_CLOSE_SECONDS = 170
+# Hard caps from priya-system.md / SPC contract (post-CP3 dual-billing model).
+HARD_CAP_SECONDS = 360
+SOFT_CLOSE_1_SECONDS = 170  # First wrap nudge; EXTENSION possible past this.
+SOFT_CLOSE_2_SECONDS = 350  # Final wrap nudge before runaway watchdog kicks in.
+
+# Legacy alias kept so existing tests don't break. New code should use the
+# specific SOFT_CLOSE_1 / SOFT_CLOSE_2 names.
+SOFT_CLOSE_SECONDS = SOFT_CLOSE_1_SECONDS
 
 
 @dataclass
@@ -54,17 +62,33 @@ class CallContext:
     lead_company: str | None
     started_at_monotonic: float
     language_state: LanguageState
+    conversation_state: ConversationState = field(default_factory=ConversationState)
     turn_idx: int = 0
     used_intro_cache: bool = False
+    phrase_cache_hits: int = 0
 
     def elapsed(self) -> float:
         return time.monotonic() - self.started_at_monotonic
 
     def should_soft_close(self) -> bool:
-        return self.elapsed() >= SOFT_CLOSE_SECONDS
+        """First soft-close (170s). LLM nudged to wrap unless EXTENSION eligible."""
+        return self.elapsed() >= SOFT_CLOSE_1_SECONDS
+
+    def should_soft_close_final(self) -> bool:
+        """Second soft-close (350s). Final wrap warning before runaway watchdog."""
+        return self.elapsed() >= SOFT_CLOSE_2_SECONDS
 
     def should_hard_stop(self) -> bool:
         return self.elapsed() >= HARD_CAP_SECONDS
+
+    def billed_units(self) -> int:
+        """Compute billed_units from elapsed time. Mirrors the DB trigger."""
+        e = self.elapsed()
+        if e <= 0:
+            return 0
+        if e <= 180:
+            return 1
+        return 2  # Capped at 2 because hard stop = 360s
 
 
 def make_initial_context(

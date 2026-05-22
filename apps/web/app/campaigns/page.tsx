@@ -1,5 +1,6 @@
 import { requireTenant } from "@/lib/auth";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { fetchBillingSummary } from "@/lib/billing";
 import { Button } from "@/components/ui/button";
 import { startBulkAction } from "./actions";
 import { NavBar } from "@/components/NavBar";
@@ -9,11 +10,10 @@ const BLENDED_RUPEES_PER_MIN = 7; // see docs/specs §10
 export default async function CampaignsPage() {
   const { tenantId } = await requireTenant();
   const supabase = createSupabaseServerClient();
-  const { data: tenant } = await supabase
-    .from("tenants")
-    .select("name")
-    .eq("id", tenantId)
-    .single();
+  const [{ data: tenant }, billing] = await Promise.all([
+    supabase.from("tenants").select("name").eq("id", tenantId).single(),
+    fetchBillingSummary(tenantId),
+  ]);
   const { count: queued } = await supabase
     .from("leads")
     .select("*", { count: "exact", head: true })
@@ -56,7 +56,12 @@ export default async function CampaignsPage() {
 
   return (
     <>
-      <NavBar tenantName={tenant?.name ?? "—"} />
+      <NavBar
+        tenantName={tenant?.name ?? "—"}
+        unitsUsed={billing.unitsUsed}
+        unitsAllowance={billing.unitsAllowance}
+        wigglePct={billing.wigglePct}
+      />
       <main className="mx-auto max-w-3xl space-y-6 p-6">
         <h1 className="text-2xl font-semibold">Campaigns</h1>
 

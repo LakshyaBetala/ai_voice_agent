@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { createClient } from "@supabase/supabase-js";
 import { scoreTranscript, callSarvamLlm } from "./score";
+import { handleScoreLive } from "./score-live";
 
 type Env = {
   SUPABASE_URL: string;
@@ -14,6 +15,16 @@ type Env = {
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/healthz", (c) => c.text("ok"));
+
+// Per-turn live scoring. The voice agent calls this every turn with the
+// latest extracted qualification slots; we persist + update lead status.
+app.post("/score-live", (c) =>
+  handleScoreLive(c, (env) =>
+    createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    }) as any,
+  ),
+);
 
 app.post("/score", async (c) => {
   const token = c.req.header("authorization")?.replace("Bearer ", "");

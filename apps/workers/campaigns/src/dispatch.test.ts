@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { dispatchSingleCall } from "./dispatch";
 
-function makeSb(opts: { dnc?: boolean; lead?: any; tenant?: any } = {}) {
+function makeSb(opts: { dnc?: boolean; lead?: any; tenant?: any; spentTodayInr?: number } = {}) {
   const writes: any[] = [];
   const lead = opts.lead ?? {
     id: "L", tenant_id: "T", name: "X", phone_e164: "+91900", status: "new",
@@ -15,9 +15,18 @@ function makeSb(opts: { dnc?: boolean; lead?: any; tenant?: any } = {}) {
     byon_provider: null,
     byon_from_number: null,
   };
+  const rpcCalls: { name: string; args: any }[] = [];
   return {
     writes,
+    rpcCalls,
     client: {
+      rpc: async (name: string, args: any) => {
+        rpcCalls.push({ name, args });
+        if (name === "tenant_spend_today") {
+          return { data: opts.spentTodayInr ?? 0, error: null };
+        }
+        return { data: null, error: null };
+      },
       from: (table: string) => {
         if (table === "leads") {
           return {
@@ -146,5 +155,72 @@ describe("dispatchSingleCall", () => {
     await dispatchSingleCall(client, provider, { leadId: "L" });
     const args = provider.startCall.mock.calls[0]![0];
     expect(args.metadata.lead_first_name).toBe("");
+  });
+
+  it("refuses when daily spend cap would be exceeded", async () => {
+    const { client } = makeSb({
+      tenant: {
+        samvaad_agent_id: "agt_1",
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: true,
+        telephony_mode: "managed",
+        daily_spend_cap_inr: 600,
+      },
+      spentTodayInr: 595, // 595 + projected 12 = 607 > 600
+    });
+    const provider = { startCall: vi.fn() } as any;
+    await expect(dispatchSingleCall(client, provider, { leadId: "L" })).rejects.toThrow(/daily_cap_reached/);
+    expect(provider.startCall).not.toHaveBeenCalled();
+  });
+
+  it("allows dispatch when daily spend cap has headroom", async () => {
+    const { client, rpcCalls } = makeSb({
+      tenant: {
+        samvaad_agent_id: "agt_1",
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: true,
+        telephony_mode: "managed",
+        daily_spend_cap_inr: 600,
+      },
+      spentTodayInr: 100,
+    });
+    const provider = { startCall: vi.fn().mockResolvedValue({ providerCallId: "c_1" }) } as any;
+    await dispatchSingleCall(client, provider, { leadId: "L" });
+    expect(provider.startCall).toHaveBeenCalled();
+    expect(rpcCalls.some((r) => r.name === "tenant_spend_today")).toBe(true);
+  });
+
+  it("skips the daily-cap RPC when daily_spend_cap_inr is not set", async () => {
+    const { client, rpcCalls } = makeSb({
+      tenant: {
+        samvaad_agent_id: "agt_1",
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: true,
+        telephony_mode: "managed",
+        // daily_spend_cap_inr intentionally omitted
+      },
+    });
+    const provider = { startCall: vi.fn().mockResolvedValue({ providerCallId: "c_1" }) } as any;
+    await dispatchSingleCall(client, provider, { leadId: "L" });
+    expect(rpcCalls.length).toBe(0);
+  });
+
+  it("treats daily_spend_cap_inr=0 as 'no cap configured' (skips check)", async () => {
+    const { client, rpcCalls } = makeSb({
+      tenant: {
+        samvaad_agent_id: "agt_1",
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: true,
+        telephony_mode: "managed",
+        daily_spend_cap_inr: 0,
+      },
+    });
+    const provider = { startCall: vi.fn().mockResolvedValue({ providerCallId: "c_1" }) } as any;
+    await dispatchSingleCall(client, provider, { leadId: "L" });
+    expect(rpcCalls.length).toBe(0);
   });
 });
