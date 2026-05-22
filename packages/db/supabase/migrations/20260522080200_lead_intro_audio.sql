@@ -16,10 +16,12 @@ create table public.lead_intro_audio (
 create index lead_intro_audio_lead_idx on public.lead_intro_audio (lead_id);
 
 alter table public.lead_intro_audio enable row level security;
-create policy lead_intro_audio_tenant_isolation
-  on public.lead_intro_audio
-  for select
-  using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+create policy lead_intro_audio_tenant_read on public.lead_intro_audio
+  for select using (tenant_id = public.current_tenant_id());
+create policy lead_intro_audio_tenant_insert on public.lead_intro_audio
+  for insert with check (tenant_id = public.current_tenant_id());
+create policy lead_intro_audio_tenant_update on public.lead_intro_audio
+  for update using (tenant_id = public.current_tenant_id());
 
 comment on table public.lead_intro_audio is
   'Pre-cached intro audio per (lead, lang). r2_key points to the .mp3 in R2 bucket intro-audio.';

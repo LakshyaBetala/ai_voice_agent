@@ -315,8 +315,10 @@ create table public.turn_latencies (
 create index turn_latencies_tenant_time_idx
   on public.turn_latencies (tenant_id, occurred_at desc);
 alter table public.turn_latencies enable row level security;
-create policy turn_latencies_tenant_isolation on public.turn_latencies for select
-  using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+create policy turn_latencies_tenant_read on public.turn_latencies for select
+  using (tenant_id = public.current_tenant_id());
+create policy turn_latencies_tenant_insert on public.turn_latencies for insert
+  with check (tenant_id = public.current_tenant_id());
 
 
 -- ── lead_intro_audio (R2-cached first-turn audio) ──────────────────────────
@@ -333,8 +335,12 @@ create table public.lead_intro_audio (
 );
 create index lead_intro_audio_lead_idx on public.lead_intro_audio (lead_id);
 alter table public.lead_intro_audio enable row level security;
-create policy lead_intro_audio_tenant_isolation on public.lead_intro_audio for select
-  using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+create policy lead_intro_audio_tenant_read on public.lead_intro_audio for select
+  using (tenant_id = public.current_tenant_id());
+create policy lead_intro_audio_tenant_insert on public.lead_intro_audio for insert
+  with check (tenant_id = public.current_tenant_id());
+create policy lead_intro_audio_tenant_update on public.lead_intro_audio for update
+  using (tenant_id = public.current_tenant_id());
 
 
 -- ── qualification_slots (CP3 — live 8-slot extraction) ─────────────────────

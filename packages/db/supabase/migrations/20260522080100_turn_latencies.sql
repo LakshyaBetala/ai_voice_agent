@@ -20,10 +20,10 @@ create index turn_latencies_tenant_time_idx
 
 alter table public.turn_latencies enable row level security;
 
-create policy turn_latencies_tenant_isolation
-  on public.turn_latencies
-  for select
-  using (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+create policy turn_latencies_tenant_read on public.turn_latencies
+  for select using (tenant_id = public.current_tenant_id());
+create policy turn_latencies_tenant_insert on public.turn_latencies
+  for insert with check (tenant_id = public.current_tenant_id());
 
 comment on table public.turn_latencies is
   'One row per agent turn. Used to prove sub-1s latency to clients and detect regressions.';
