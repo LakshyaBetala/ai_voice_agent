@@ -100,6 +100,26 @@ describe("handleSamvaadEvent", () => {
     ).toBe(true);
   });
 
+  it("records turn_latencies on turn.completed", async () => {
+    const { client, calls } = fakeSupabase();
+    await handleSamvaadEvent(client, {
+      kind: "turn.completed",
+      event_id: "t1",
+      call_id: "prov_1",
+      turn_idx: 3,
+      stt_final_ms: 210,
+      llm_first_token_ms: 240,
+      tts_first_chunk_ms: 180,
+      total_turn_ms: 820,
+      used_intro_cache: false,
+    } as const);
+    expect(
+      calls.some(
+        (c) => c.table === "turn_latencies" && c.op === "insert" && c.rows?.total_turn_ms === 820,
+      ),
+    ).toBe(true);
+  });
+
   it("on no_answer marks lead cold", async () => {
     const { client, calls } = fakeSupabase();
     await handleSamvaadEvent(client, {

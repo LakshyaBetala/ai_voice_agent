@@ -6,3 +6,4 @@ export * from "./samvaad/types";
 export * from "./samvaad/client";
 export * from "./samvaad/provider";
 export * from "./scoring-schema";
+export * from "./intro-cache";

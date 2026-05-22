@@ -44,14 +44,70 @@ export default async function SettingsPage() {
               <option value="ta-IN">Tamil</option>
             </select>
           </div>
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div>
+              <Label className="text-base">Agent enabled</Label>
+              <p className="text-xs text-muted-foreground">
+                Master switch — when off, no outbound AI calls will dial.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              name="agent_enabled"
+              defaultChecked={t.agent_enabled !== false}
+              className="h-5 w-5"
+            />
+          </div>
+
           <div>
-            <Label>Exotel caller ID</Label>
+            <Label>Telephony mode</Label>
+            <select
+              name="telephony_mode"
+              defaultValue={t.telephony_mode ?? "managed"}
+              className="block h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+            >
+              <option value="managed">Managed (we provide the number)</option>
+              <option value="byon">BYON (use your own Exotel/Plivo trunk)</option>
+            </select>
+          </div>
+
+          <div>
+            <Label>Exotel caller ID (managed mode)</Label>
             <Input
               name="exotel_caller_id"
               defaultValue={t.exotel_caller_id ?? ""}
               placeholder="+91..."
             />
           </div>
+
+          <div className="rounded-md border border-dashed p-3 space-y-3">
+            <p className="text-xs text-muted-foreground">
+              BYON fields — only used when Telephony mode = BYON. Store
+              credentials separately via Supabase Vault.
+            </p>
+            <div>
+              <Label>BYON provider</Label>
+              <select
+                name="byon_provider"
+                defaultValue={t.byon_provider ?? ""}
+                className="block h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
+              >
+                <option value="">—</option>
+                <option value="exotel">Exotel</option>
+                <option value="plivo">Plivo</option>
+                <option value="tata">Tata</option>
+              </select>
+            </div>
+            <div>
+              <Label>BYON from-number</Label>
+              <Input
+                name="byon_from_number"
+                defaultValue={t.byon_from_number ?? ""}
+                placeholder="+91..."
+              />
+            </div>
+          </div>
+
           <div>
             <Label>WhatsApp handoff number</Label>
             <Input

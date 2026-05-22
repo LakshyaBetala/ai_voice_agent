@@ -10,6 +10,10 @@ function makeSb(opts: { dnc?: boolean; lead?: any; tenant?: any } = {}) {
     samvaad_agent_id: "agt_1",
     exotel_caller_id: "+91444",
     persona_lang_default: "en-IN",
+    agent_enabled: true,
+    telephony_mode: "managed",
+    byon_provider: null,
+    byon_from_number: null,
   };
   return {
     writes,
@@ -70,10 +74,49 @@ describe("dispatchSingleCall", () => {
 
   it("refuses when tenant has no samvaad_agent_id", async () => {
     const { client } = makeSb({
-      tenant: { samvaad_agent_id: null, exotel_caller_id: "+91444", persona_lang_default: "en-IN" },
+      tenant: {
+        samvaad_agent_id: null,
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: true,
+        telephony_mode: "managed",
+      },
     });
     const provider = { startCall: vi.fn() } as any;
     await expect(dispatchSingleCall(client, provider, { leadId: "L" })).rejects.toThrow(/not provisioned/);
+  });
+
+  it("refuses when agent_enabled is false (master switch off)", async () => {
+    const { client } = makeSb({
+      tenant: {
+        samvaad_agent_id: "agt_1",
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: false,
+        telephony_mode: "managed",
+      },
+    });
+    const provider = { startCall: vi.fn() } as any;
+    await expect(dispatchSingleCall(client, provider, { leadId: "L" })).rejects.toThrow(/agent_disabled/);
+    expect(provider.startCall).not.toHaveBeenCalled();
+  });
+
+  it("uses byon_from_number when telephony_mode is byon", async () => {
+    const { client } = makeSb({
+      tenant: {
+        samvaad_agent_id: "agt_1",
+        exotel_caller_id: "+91444",
+        persona_lang_default: "en-IN",
+        agent_enabled: true,
+        telephony_mode: "byon",
+        byon_provider: "exotel",
+        byon_from_number: "+91555",
+      },
+    });
+    const provider = { startCall: vi.fn().mockResolvedValue({ providerCallId: "c1" }) } as any;
+    await dispatchSingleCall(client, provider, { leadId: "L" });
+    const args = provider.startCall.mock.calls[0]![0];
+    expect(args.callerId).toBe("+91555");
   });
 
   it("calls provider and writes a calls row on happy path", async () => {

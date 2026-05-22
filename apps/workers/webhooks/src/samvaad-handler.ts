@@ -70,6 +70,18 @@ export async function handleSamvaadEvent(
         await triggers.onCallEnded(call.id);
       }
       break;
+    case "turn.completed":
+      await sb.from("turn_latencies").insert({
+        call_id: call.id,
+        tenant_id: call.tenant_id,
+        turn_idx: evt.turn_idx,
+        stt_final_ms: evt.stt_final_ms,
+        llm_first_token_ms: evt.llm_first_token_ms,
+        tts_first_chunk_ms: evt.tts_first_chunk_ms,
+        total_turn_ms: evt.total_turn_ms,
+        used_intro_cache: evt.used_intro_cache,
+      });
+      break;
     case "recording.ready":
       // Actual R2 upload handled by index.ts; here we only mark pending.
       await sb

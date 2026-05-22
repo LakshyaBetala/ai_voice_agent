@@ -44,6 +44,16 @@ export default async function CampaignsPage() {
       ? Math.round((hot / scores7.length) * 100)
       : 0;
 
+  const { data: turns } = await supabase
+    .from("turn_latencies")
+    .select("total_turn_ms")
+    .gte("occurred_at", since)
+    .order("occurred_at", { ascending: false })
+    .limit(1000);
+  const turnMs = (turns ?? []).map((t) => t.total_turn_ms).sort((a, b) => a - b);
+  const p50 = turnMs.length ? turnMs[Math.floor(turnMs.length * 0.5)] : 0;
+  const p95 = turnMs.length ? turnMs[Math.floor(turnMs.length * 0.95)] : 0;
+
   return (
     <>
       <NavBar tenantName={tenant?.name ?? "—"} />
@@ -57,9 +67,18 @@ export default async function CampaignsPage() {
           <Stat label="Est cost (7d)" value={`₹${estCost}`} />
         </section>
 
-        <section className="rounded-md border p-4">
+        <section className="rounded-md border p-4 space-y-1">
           <p className="text-sm">
             Hot rate (last 7 days): <strong>{hotRate}%</strong>
+          </p>
+          <p className="text-sm">
+            Turn latency p50/p95 (7d):{" "}
+            <strong>
+              {p50}ms / {p95}ms
+            </strong>{" "}
+            <span className="text-xs text-muted-foreground">
+              ({turnMs.length} samples — target &lt; 1000ms p95)
+            </span>
           </p>
         </section>
 

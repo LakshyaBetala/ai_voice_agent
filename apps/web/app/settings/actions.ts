@@ -8,6 +8,10 @@ const Schema = z.object({
   persona_lang_default: z.enum(["en-IN", "hi-IN", "ta-IN"]),
   exotel_caller_id: z.string().optional().nullable(),
   whatsapp_handoff_number: z.string().optional().nullable(),
+  agent_enabled: z.boolean(),
+  telephony_mode: z.enum(["managed", "byon"]),
+  byon_provider: z.enum(["exotel", "plivo", "tata"]).optional().nullable(),
+  byon_from_number: z.string().optional().nullable(),
 });
 
 export async function updateTenantSettingsAction(fd: FormData) {
@@ -16,8 +20,18 @@ export async function updateTenantSettingsAction(fd: FormData) {
     persona_lang_default: fd.get("persona_lang_default"),
     exotel_caller_id: fd.get("exotel_caller_id") || null,
     whatsapp_handoff_number: fd.get("whatsapp_handoff_number") || null,
+    agent_enabled: fd.get("agent_enabled") === "on",
+    telephony_mode: fd.get("telephony_mode") || "managed",
+    byon_provider: fd.get("byon_provider") || null,
+    byon_from_number: fd.get("byon_from_number") || null,
   });
   if (!parsed.success) return { error: parsed.error.issues[0]!.message };
+  if (
+    parsed.data.telephony_mode === "byon" &&
+    (!parsed.data.byon_provider || !parsed.data.byon_from_number)
+  ) {
+    return { error: "BYON requires provider and from-number" };
+  }
 
   const supabase = createSupabaseServerClient();
   const {

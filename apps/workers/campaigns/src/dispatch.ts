@@ -12,10 +12,22 @@ export async function dispatchSingleCall(
 
   const { data: tenant } = await sb
     .from("tenants")
-    .select("samvaad_agent_id,exotel_caller_id,persona_lang_default")
+    .select(
+      "samvaad_agent_id,exotel_caller_id,persona_lang_default,agent_enabled,telephony_mode,byon_provider,byon_from_number",
+    )
     .eq("id", lead.tenant_id)
     .single();
-  if (!tenant?.samvaad_agent_id || !tenant.exotel_caller_id) {
+  if (!tenant?.samvaad_agent_id) {
+    throw new Error("tenant not provisioned for voice");
+  }
+  if (tenant.agent_enabled === false) {
+    throw new Error("agent_disabled");
+  }
+  const fromNumber =
+    tenant.telephony_mode === "byon"
+      ? tenant.byon_from_number
+      : tenant.exotel_caller_id;
+  if (!fromNumber) {
     throw new Error("tenant not provisioned for voice");
   }
 
@@ -41,7 +53,7 @@ export async function dispatchSingleCall(
   const { providerCallId } = await provider.startCall({
     agentId: tenant.samvaad_agent_id,
     to_e164: lead.phone_e164,
-    callerId: tenant.exotel_caller_id,
+    callerId: fromNumber,
     langHint: tenant.persona_lang_default as any,
     metadata: {
       lead_id: lead.id,
