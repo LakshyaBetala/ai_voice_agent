@@ -21,6 +21,33 @@
 
 
 -- =============================================================================
+-- BLOCK 0 — RESET (run ONLY if a previous BLOCK 1 attempt partially applied)
+-- Safe even on a fresh project — it's all "if exists" drops.
+-- =============================================================================
+
+drop view  if exists public.tenant_monthly_units cascade;
+
+drop function if exists public.tenant_spend_today(uuid)        cascade;
+drop function if exists public.compute_billed_units()           cascade;
+drop function if exists public.current_tenant_id()              cascade;
+drop function if exists public.custom_access_token_hook(jsonb)  cascade;
+
+drop table if exists public.qualification_slots cascade;
+drop table if exists public.lead_intro_audio    cascade;
+drop table if exists public.turn_latencies      cascade;
+drop table if exists public.dnc_list            cascade;
+drop table if exists public.handoffs            cascade;
+drop table if exists public.lead_scores         cascade;
+drop table if exists public.transcripts         cascade;
+drop table if exists public.call_events         cascade;
+drop table if exists public.calls               cascade;
+drop table if exists public.campaigns           cascade;
+drop table if exists public.leads               cascade;
+drop table if exists public.users               cascade;
+drop table if exists public.tenants             cascade;
+
+
+-- =============================================================================
 -- BLOCK 1 — SCHEMA (13 migrations folded into one paste)
 -- =============================================================================
 
@@ -210,8 +237,9 @@ create policy tenant_self_read   on public.tenants for select using (id = public
 create policy tenant_self_update on public.tenants for update using (id = public.current_tenant_id());
 create policy users_same_tenant_read on public.users for select using (tenant_id = public.current_tenant_id());
 
+-- Tables that have tenant_id directly:
 do $$ declare t text; begin
-  foreach t in array array['leads','campaigns','calls','transcripts','lead_scores','handoffs','dnc_list'] loop
+  foreach t in array array['leads','campaigns','calls','dnc_list'] loop
     execute format($f$
       create policy %1$I_tenant_read   on public.%1$I for select using (tenant_id = public.current_tenant_id());
       create policy %1$I_tenant_insert on public.%1$I for insert with check (tenant_id = public.current_tenant_id());
@@ -221,14 +249,43 @@ do $$ declare t text; begin
   end loop;
 end $$;
 
+-- call_events scopes through calls.
 create policy call_events_via_call_read on public.call_events for select
   using (exists (select 1 from public.calls c
-                 where c.id = call_events.call_id
-                   and c.tenant_id = public.current_tenant_id()));
+                 where c.id = call_events.call_id and c.tenant_id = public.current_tenant_id()));
 create policy call_events_via_call_insert on public.call_events for insert
   with check (exists (select 1 from public.calls c
-                      where c.id = call_events.call_id
-                        and c.tenant_id = public.current_tenant_id()));
+                      where c.id = call_events.call_id and c.tenant_id = public.current_tenant_id()));
+
+-- transcripts scopes through calls.
+create policy transcripts_via_call_read on public.transcripts for select
+  using (exists (select 1 from public.calls c
+                 where c.id = transcripts.call_id and c.tenant_id = public.current_tenant_id()));
+create policy transcripts_via_call_insert on public.transcripts for insert
+  with check (exists (select 1 from public.calls c
+                      where c.id = transcripts.call_id and c.tenant_id = public.current_tenant_id()));
+
+-- lead_scores scopes through calls.
+create policy lead_scores_via_call_read on public.lead_scores for select
+  using (exists (select 1 from public.calls c
+                 where c.id = lead_scores.call_id and c.tenant_id = public.current_tenant_id()));
+create policy lead_scores_via_call_insert on public.lead_scores for insert
+  with check (exists (select 1 from public.calls c
+                      where c.id = lead_scores.call_id and c.tenant_id = public.current_tenant_id()));
+create policy lead_scores_via_call_update on public.lead_scores for update
+  using (exists (select 1 from public.calls c
+                 where c.id = lead_scores.call_id and c.tenant_id = public.current_tenant_id()));
+
+-- handoffs scopes through leads.
+create policy handoffs_via_lead_read on public.handoffs for select
+  using (exists (select 1 from public.leads l
+                 where l.id = handoffs.lead_id and l.tenant_id = public.current_tenant_id()));
+create policy handoffs_via_lead_insert on public.handoffs for insert
+  with check (exists (select 1 from public.leads l
+                      where l.id = handoffs.lead_id and l.tenant_id = public.current_tenant_id()));
+create policy handoffs_via_lead_update on public.handoffs for update
+  using (exists (select 1 from public.leads l
+                 where l.id = handoffs.lead_id and l.tenant_id = public.current_tenant_id()));
 
 
 -- ── Agent toggle + BYON (Bring Your Own Number) ────────────────────────────

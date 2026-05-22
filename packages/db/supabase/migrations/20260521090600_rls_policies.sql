@@ -29,14 +29,11 @@ create policy tenant_self_update on public.tenants for update
 create policy users_same_tenant_read on public.users for select
   using (tenant_id = public.current_tenant_id());
 
--- Generic tenant-scoped policies for the rest
+-- Tables that have a tenant_id column directly.
 do $$
 declare t text;
 begin
-  foreach t in array array[
-    'leads','campaigns','calls','transcripts','lead_scores',
-    'handoffs','dnc_list'
-  ] loop
+  foreach t in array array['leads','campaigns','calls','dnc_list'] loop
     execute format($f$
       create policy %1$I_tenant_read   on public.%1$I for select
         using (tenant_id = public.current_tenant_id());
@@ -50,7 +47,7 @@ begin
   end loop;
 end $$;
 
--- call_events: scope through calls
+-- call_events: scope through calls (no tenant_id column).
 create policy call_events_via_call_read on public.call_events for select
   using (exists (select 1 from public.calls c
                  where c.id = call_events.call_id
@@ -59,3 +56,41 @@ create policy call_events_via_call_insert on public.call_events for insert
   with check (exists (select 1 from public.calls c
                       where c.id = call_events.call_id
                         and c.tenant_id = public.current_tenant_id()));
+
+-- transcripts: scope through calls.
+create policy transcripts_via_call_read on public.transcripts for select
+  using (exists (select 1 from public.calls c
+                 where c.id = transcripts.call_id
+                   and c.tenant_id = public.current_tenant_id()));
+create policy transcripts_via_call_insert on public.transcripts for insert
+  with check (exists (select 1 from public.calls c
+                      where c.id = transcripts.call_id
+                        and c.tenant_id = public.current_tenant_id()));
+
+-- lead_scores: scope through calls.
+create policy lead_scores_via_call_read on public.lead_scores for select
+  using (exists (select 1 from public.calls c
+                 where c.id = lead_scores.call_id
+                   and c.tenant_id = public.current_tenant_id()));
+create policy lead_scores_via_call_insert on public.lead_scores for insert
+  with check (exists (select 1 from public.calls c
+                      where c.id = lead_scores.call_id
+                        and c.tenant_id = public.current_tenant_id()));
+create policy lead_scores_via_call_update on public.lead_scores for update
+  using (exists (select 1 from public.calls c
+                 where c.id = lead_scores.call_id
+                   and c.tenant_id = public.current_tenant_id()));
+
+-- handoffs: scope through leads.
+create policy handoffs_via_lead_read on public.handoffs for select
+  using (exists (select 1 from public.leads l
+                 where l.id = handoffs.lead_id
+                   and l.tenant_id = public.current_tenant_id()));
+create policy handoffs_via_lead_insert on public.handoffs for insert
+  with check (exists (select 1 from public.leads l
+                      where l.id = handoffs.lead_id
+                        and l.tenant_id = public.current_tenant_id()));
+create policy handoffs_via_lead_update on public.handoffs for update
+  using (exists (select 1 from public.leads l
+                 where l.id = handoffs.lead_id
+                   and l.tenant_id = public.current_tenant_id()));
