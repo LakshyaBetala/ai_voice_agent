@@ -25,6 +25,12 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
 ]
+# Only needed for the local mic/speaker harness (voice_agent.local_audio).
+# Skipped on CI / Pipecat container — those use the real telephony transport.
+local-audio = [
+    "sounddevice>=0.4",
+    "numpy>=1.26",
+]
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

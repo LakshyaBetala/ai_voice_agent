@@ -48,6 +48,12 @@ def _require_bearer(authorization: str | None = Header(default=None)) -> None:
 
 app = FastAPI(title="voice-agent", version="0.1.0")
 
+# Exotel WS + outbound trigger live in their own module to keep this file
+# focused on the SamvaadClient-compatible HTTP surface.
+from .exotel_ws_handler import router as exotel_router  # noqa: E402
+
+app.include_router(exotel_router)
+
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
