@@ -31,12 +31,12 @@ class TestBuildIntroText:
 
     def test_tamil_with_name(self):
         out = build_intro_text(lang="ta-IN", first_name="Karthik")
-        assert "Karthik avargale" in out
+        assert "Karthik" in out
 
     def test_unusable_name_falls_back(self):
         out = build_intro_text(lang="en-IN", first_name="Unknown")
         assert "Unknown" not in out
-        assert "Namaste" in out
+        assert "Priya" in out
 
     def test_empty_name_never_leaves_stray_space(self):
         assert "Hello ," not in build_intro_text(lang="en-IN", first_name="")

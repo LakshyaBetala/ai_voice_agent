@@ -50,32 +50,34 @@ def build_intro_text(*, lang: str, first_name: str | None) -> str:
     if lang == "en-IN":
         if name:
             return (
-                f"Hello {name}, this is Priya from Supreme Petrochemicals, "
-                "Chennai. Is this a good time for a quick 30-second conversation?"
+                f"Hello {name}, this is Priya calling from Supreme Petrochemicals, Chennai. "
+                "I just wanted two minutes of your time regarding chemicals supply. Is now okay?"
             )
         return (
-            "Namaste, this is Priya from Supreme Petrochemicals, Chennai. "
-            "Is this a good time?"
+            "Hello, this is Priya from Supreme Petrochemicals, Chennai. "
+            "Can I take two minutes of your time regarding chemicals supply?"
         )
     if lang == "hi-IN":
         if name:
             return (
-                f"Namaste {name} ji, main Priya hoon Supreme Petrochemicals "
-                "Chennai se. Kya aap 30 second baat kar sakte hain?"
+                f"Haan ji namaste, {name} ji? Mai Priya bol rahi hu, "
+                "Supreme Petrochemicals Chennai se. Kya mai aapke do minute le sakti hu "
+                "chemicals supply ke baare me?"
             )
         return (
-            "Namaste, main Priya hoon Supreme Petrochemicals Chennai se. "
-            "Kya aap 30 second baat kar sakte hain?"
+            "Haan ji namaste, mai Priya bol rahi hu Supreme Petrochemicals "
+            "Chennai se. Kya mai aapke do minute le sakti hu?"
         )
     # ta-IN
     if name:
         return (
-            f"Vanakkam {name} avargale, naan Priya, Supreme Petrochemicals "
-            "Chennai-il irundhu. Ungalukku oru nimisham nerum unda?"
+            f"Vanakkam {name} sir, naan Priya, Supreme Petrochemicals "
+            "Chennai-la irundhu call panren. Ungalukku rendu nimisham time irukka "
+            "chemicals supply pathi pesanum?"
         )
     return (
-        "Vanakkam, naan Priya, Supreme Petrochemicals Chennai-il irundhu. "
-        "Ungalukku oru nimisham nerum unda?"
+        "Vanakkam sir, naan Priya, Supreme Petrochemicals Chennai-la irundhu. "
+        "Rendu nimisham time irukka?"
     )
 
 
