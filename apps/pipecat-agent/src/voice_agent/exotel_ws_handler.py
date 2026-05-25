@@ -41,6 +41,12 @@ from .exotel_transport import (
 from .pipeline import HARD_CAP_SECONDS, CallContext, make_initial_context
 from .qualification import QualificationSlots
 from .r2_client import R2Client, R2Config, R2ConfigError
+from .supabase_client import (
+    AgentSupabaseClient,
+    SupabaseConfig,
+    SupabaseConfigError,
+    persist_turn_async,
+)
 from .turn_orchestrator import TurnDependencies, run_turn
 
 logger = logging.getLogger(__name__)
@@ -59,6 +65,7 @@ class _ActiveCall:
     ctx: CallContext
     slots: QualificationSlots
     deps: TurnDependencies
+    db: AgentSupabaseClient | None = None
 
 
 _active_calls: dict[str, _ActiveCall] = {}
@@ -136,7 +143,8 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
         lead_company=req.lead_company,
         default_lang=req.lang_hint,
     )
-    _active_calls[call_id] = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps)
+    db = _build_db_client()
+    _active_calls[call_id] = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps, db=db)
 
     try:
         resp = await place_outbound_call(
@@ -238,6 +246,24 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
 
             active.slots = result.slots
 
+            persist_turn_async(
+                active.db,
+                call_id=active.ctx.call_id,
+                tenant_id=active.ctx.tenant_id,
+                lead_id=active.ctx.lead_id,
+                turn_idx=active.ctx.turn_idx - 1,
+                lead_text=result.lead_text,
+                lead_lang=result.lead_lang,
+                priya_text=result.priya_text,
+                slots_row=result.slots.to_db_row(
+                    call_id=active.ctx.call_id,
+                    tenant_id=active.ctx.tenant_id,
+                    lead_id=active.ctx.lead_id,
+                    turn_idx=active.ctx.turn_idx - 1,
+                ),
+                latency=result.latency_ms,
+            )
+
             if result.bridge_audio:
                 try:
                     await session.send_audio(tts_wav_to_mulaw_8k(result.bridge_audio))
@@ -316,3 +342,13 @@ def _build_deps_from_env() -> TurnDependencies:
         r2_reader=r2_reader,
         r2_writer=r2_writer,
     )
+
+
+def _build_db_client() -> AgentSupabaseClient | None:
+    """Build Supabase client from env. Returns None if unconfigured."""
+    try:
+        cfg = SupabaseConfig.from_env()
+        return AgentSupabaseClient(cfg)
+    except SupabaseConfigError as exc:
+        logger.warning("Supabase disabled (%s); no DB persistence", exc)
+        return None
