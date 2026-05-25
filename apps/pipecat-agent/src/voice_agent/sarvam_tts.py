@@ -43,9 +43,34 @@ import httpx
 
 SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
 DEFAULT_MODEL = "bulbul:v3"
-DEFAULT_SPEAKER = "anushka"
+
+# Bulbul v3 speaker roster (Sarvam, mid-2026). Anushka/Meera from v2 are
+# NOT available on v3; passing them returns HTTP 400.
+BULBUL_V3_FEMALE_SPEAKERS: frozenset[str] = frozenset({
+    "priya", "ritu", "neha", "pooja", "simran", "kavya", "ishita",
+    "shreya", "roopa", "tanya",
+})
+BULBUL_V3_MALE_SPEAKERS: frozenset[str] = frozenset({
+    "aditya", "ashutosh", "rahul", "rohan", "amit", "dev", "ratan",
+    "varun", "manan", "sumit", "kabir", "aayan", "shubh", "advait",
+    "anand", "tarun",
+})
+BULBUL_V3_SPEAKERS: frozenset[str] = BULBUL_V3_FEMALE_SPEAKERS | BULBUL_V3_MALE_SPEAKERS
+
+# Per-tenant CRM picks one of these two. Defaults below are picked for SPC.
+DEFAULT_FEMALE_SPEAKER = "priya"  # Matches our agent persona name. Convenient.
+DEFAULT_MALE_SPEAKER = "rahul"
+
+# Backward-compatible default — what the system uses if a tenant hasn't
+# picked a voice yet. CRM settings page overrides this per tenant.
+DEFAULT_SPEAKER = DEFAULT_FEMALE_SPEAKER
 DEFAULT_SAMPLE_RATE = 8000  # Match Plivo PSTN audio stream.
 DEFAULT_TIMEOUT_SECONDS = 6.0
+
+
+def is_valid_v3_speaker(speaker: str) -> bool:
+    """Guard against silent breakage when a tenant or env var sets a stale name."""
+    return speaker.lower() in BULBUL_V3_SPEAKERS
 
 
 @dataclass(frozen=True)
@@ -78,17 +103,23 @@ async def synthesize(
     if not api_key:
         raise SarvamTTSError("missing SARVAM_API_KEY")
 
-    body = {
+    body: dict[str, Any] = {
         "inputs": [text],
         "target_language_code": lang,
         "speaker": speaker,
-        "pitch": pitch,
-        "pace": pace,
-        "loudness": loudness,
         "speech_sample_rate": sample_rate,
         "enable_preprocessing": True,
         "model": model,
     }
+    # Bulbul v3 rejects pitch/loudness; bulbul v2 accepts them. Only send
+    # when the caller customized them AND we're on a model that accepts.
+    if model.startswith("bulbul:v2"):
+        body["pitch"] = pitch
+        body["pace"] = pace
+        body["loudness"] = loudness
+    elif pace != 1.0:
+        # v3 still accepts pace; only include when changed from default.
+        body["pace"] = pace
 
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=timeout)

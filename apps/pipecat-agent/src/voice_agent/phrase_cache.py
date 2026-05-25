@@ -32,8 +32,9 @@ from typing import Awaitable, Callable, Iterable, Protocol
 
 # Pinned Sarvam Bulbul voice for all 3 languages. Bulbul v3 ships with
 # multiple voice IDs per language; we pick one and never swap so the
-# language transition doesn't double as a voice transition.
-PINNED_VOICE_ID = "bulbul:anushka-chennai-female-v3"
+# language transition doesn't double as a voice transition. CRM-configurable
+# per tenant; this default matches our agent persona name (Priya).
+PINNED_VOICE_ID = "bulbul-v3:priya-female"
 
 
 def phrase_r2_key(*, text: str, lang: str, voice_id: str = PINNED_VOICE_ID) -> str:
