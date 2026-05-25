@@ -42,8 +42,14 @@ from .qualification import QualificationSlots
 from .r2_client import R2Client, R2Config, R2ConfigError
 from .sarvam_stt import STTResult, transcribe_batch
 from .sarvam_tts import synthesize as tts_synthesize
-from .gemini_llm import generate as gemini_generate
-from .turn_orchestrator import TurnDependencies, run_turn
+from .gemini_llm import generate as gemini_generate, stream_generate as gemini_stream
+from .streaming_orchestrator import (
+    AudioChunkEvent,
+    StreamingDependencies,
+    TurnCompleteEvent,
+    run_turn_streaming,
+)
+from .turn_orchestrator import TurnDependencies
 
 
 # Telephony-grade audio settings. Match what Plivo will deliver later so
@@ -92,6 +98,16 @@ class _GeminiAdapter:
             client=self.client,
         )
         return resp.text
+
+    async def stream_respond(self, system_message: str, user_message: str):
+        async for chunk in gemini_stream(
+            system_message=system_message,
+            user_message=user_message,
+            api_key=self.api_key,
+            model=self.model,
+            client=self.client,
+        ):
+            yield chunk
 
     async def extract(self, prompt: str) -> str:
         resp = await gemini_generate(
@@ -250,6 +266,11 @@ async def run_local(args: argparse.Namespace) -> None:
         )
 
         slots = QualificationSlots()
+        sdeps = StreamingDependencies(
+            stt=deps.stt, tts=deps.tts, llm=deps.llm,
+            r2_reader=deps.r2_reader, r2_writer=deps.r2_writer,
+        )
+
         while True:
             if ctx.should_hard_stop():
                 print("[hard cap reached — ending call]")
@@ -266,35 +287,39 @@ async def run_local(args: argparse.Namespace) -> None:
 
             wav = pcm_to_wav_bytes(pcm)
             t0 = time.monotonic()
-            result = await run_turn(
-                ctx=ctx,
-                audio_in=wav,
-                deps=deps,
-                prior_slots=slots,
-            )
-            wall_ms = int((time.monotonic() - t0) * 1000)
-            slots = result.slots
 
-            print(f"\n  LEAD ({result.lead_lang}): {result.lead_text}")
-            print(f"  PRIYA: {result.priya_text}")
-            lm = result.latency_ms
-            print(
-                f"  [turn={ctx.turn_idx}  phase={ctx.conversation_state.phase.value}  "
-                f"phrase_cached={result.used_phrase_cache}  "
-                f"buying_conf={slots.buying_confidence:.2f}]"
-            )
-            print(
-                f"  [latency  stt={lm.get('stt_ms', 0)}ms  "
-                f"llm={lm.get('llm_ms', 0)}ms  "
-                f"tts={lm.get('tts_ms', 0)}ms  "
-                f"total_orch={lm.get('total_ms', 0)}ms  wall={wall_ms}ms]"
-            )
-
-            if result.bridge_audio:
-                bridge_pcm, bridge_sr = wav_bytes_to_pcm(result.bridge_audio)
-                play_pcm(bridge_pcm, bridge_sr)
-            priya_pcm, priya_sr = wav_bytes_to_pcm(result.priya_audio)
-            play_pcm(priya_pcm, priya_sr)
+            # Streaming: play each sentence as it arrives
+            sentence_count = 0
+            async for event in run_turn_streaming(
+                ctx=ctx, audio_in=wav, deps=sdeps, prior_slots=slots,
+            ):
+                if isinstance(event, AudioChunkEvent):
+                    sentence_count += 1
+                    if sentence_count == 1:
+                        first_audio_ms = int((time.monotonic() - t0) * 1000)
+                        print(f"\n  [first audio in {first_audio_ms}ms]")
+                    print(f"  PRIYA [{event.sentence_idx}]: {event.text}")
+                    try:
+                        priya_pcm, priya_sr = wav_bytes_to_pcm(event.audio)
+                        play_pcm(priya_pcm, priya_sr)
+                    except Exception:
+                        print("  [audio playback failed — likely not WAV]")
+                elif isinstance(event, TurnCompleteEvent):
+                    slots = event.slots
+                    wall_ms = int((time.monotonic() - t0) * 1000)
+                    lm = event.latency_ms
+                    print(f"\n  LEAD ({event.lead_lang}): {event.lead_text}")
+                    print(
+                        f"  [turn={ctx.turn_idx}  phase={ctx.conversation_state.phase.value}  "
+                        f"sentences={event.total_sentences}  cache_hits={event.cache_hits}  "
+                        f"buying_conf={slots.buying_confidence:.2f}]"
+                    )
+                    print(
+                        f"  [latency  stt={lm.get('stt_ms', 0)}ms  "
+                        f"llm_1st_sent={lm.get('llm_first_sentence_ms', 0)}ms  "
+                        f"tts_1st={lm.get('tts_first_sentence_ms', 0)}ms  "
+                        f"total={lm.get('total_ms', 0)}ms  wall={wall_ms}ms]"
+                    )
 
         print("\n=== Call summary ===")
         print(f"  turns:        {ctx.turn_idx}")

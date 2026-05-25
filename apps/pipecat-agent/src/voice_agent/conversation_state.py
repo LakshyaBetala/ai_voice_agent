@@ -37,13 +37,13 @@ class Phase(str, Enum):
 
 
 # Phase transition thresholds (seconds elapsed).
-# Time is the floor; slot count + buying_confidence can also gate advance.
+# Aligned with credit boundaries: 150s (1 credit), 300s (2 credits), 450s (3 credits).
 GREETING_END_SEC = 8.0
 CONNECT_END_SEC = 35.0
 DISCOVER_END_SEC = 70.0
-QUALIFY_END_SEC = 150.0
-CLOSE_END_SEC = 170.0
-EXTENSION_END_SEC = 350.0
+QUALIFY_END_SEC = 130.0   # Qualify before 1st credit boundary
+CLOSE_END_SEC = 140.0     # Soft close at 140s → hard boundary at 150s
+EXTENSION_END_SEC = 290.0  # Extension before 2nd credit boundary
 
 # Minimum buying_confidence at 170s soft-close to enter EXTENSION instead
 # of wrapping up. Below this, we go to CLOSE and end gracefully.

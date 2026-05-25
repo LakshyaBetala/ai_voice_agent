@@ -41,10 +41,19 @@ from .conversation_state import ConversationState
 from .language_state import Lang, LanguageState
 from .prompts import build_intro_text, build_system_message, load_priya_prompt
 
-# Hard caps from priya-system.md / SPC contract (post-CP3 dual-billing model).
-HARD_CAP_SECONDS = 360
-SOFT_CLOSE_1_SECONDS = 170  # First wrap nudge; EXTENSION possible past this.
-SOFT_CLOSE_2_SECONDS = 350  # Final wrap nudge before runaway watchdog kicks in.
+# Credit-based billing tiers:
+#   0-150s  = 1 credit
+#   150-300s = 2 credits
+#   300-450s = 3 credits (hard cap, no 4th credit)
+CREDIT_1_SECONDS = 150
+CREDIT_2_SECONDS = 300
+HARD_CAP_SECONDS = 450  # 3-credit cap
+SOFT_CLOSE_1_SECONDS = 140  # Nudge before 1st credit boundary
+SOFT_CLOSE_2_SECONDS = 290  # Nudge before 2nd credit boundary
+SOFT_CLOSE_3_SECONDS = 430  # Final nudge before hard cap
+
+# Legacy alias kept so existing tests/imports don't break.
+SOFT_CLOSE_SECONDS = SOFT_CLOSE_1_SECONDS
 
 # Legacy alias kept so existing tests don't break. New code should use the
 # specific SOFT_CLOSE_1 / SOFT_CLOSE_2 names.
@@ -71,24 +80,35 @@ class CallContext:
         return time.monotonic() - self.started_at_monotonic
 
     def should_soft_close(self) -> bool:
-        """First soft-close (170s). LLM nudged to wrap unless EXTENSION eligible."""
+        """Nudge before 1st credit boundary (140s)."""
         return self.elapsed() >= SOFT_CLOSE_1_SECONDS
 
-    def should_soft_close_final(self) -> bool:
-        """Second soft-close (350s). Final wrap warning before runaway watchdog."""
+    def should_soft_close_2(self) -> bool:
+        """Nudge before 2nd credit boundary (290s)."""
         return self.elapsed() >= SOFT_CLOSE_2_SECONDS
+
+    def should_soft_close_final(self) -> bool:
+        """Final nudge before hard cap (430s)."""
+        return self.elapsed() >= SOFT_CLOSE_3_SECONDS
 
     def should_hard_stop(self) -> bool:
         return self.elapsed() >= HARD_CAP_SECONDS
 
     def billed_units(self) -> int:
-        """Compute billed_units from elapsed time. Mirrors the DB trigger."""
+        """Compute credits from elapsed time. Mirrors the DB trigger.
+
+        0-150s  = 1 credit
+        150-300s = 2 credits
+        300+     = 3 credits (capped — hard stop at 450s)
+        """
         e = self.elapsed()
         if e <= 0:
             return 0
-        if e <= 180:
+        if e <= CREDIT_1_SECONDS:
             return 1
-        return 2  # Capped at 2 because hard stop = 360s
+        if e <= CREDIT_2_SECONDS:
+            return 2
+        return 3
 
 
 def make_initial_context(

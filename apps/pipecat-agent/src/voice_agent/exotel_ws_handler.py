@@ -41,6 +41,12 @@ from .exotel_transport import (
 from .pipeline import HARD_CAP_SECONDS, CallContext, make_initial_context
 from .qualification import QualificationSlots
 from .r2_client import R2Client, R2Config, R2ConfigError
+from .streaming_orchestrator import (
+    AudioChunkEvent,
+    StreamingDependencies,
+    TurnCompleteEvent,
+    run_turn_streaming,
+)
 from .supabase_client import (
     AgentSupabaseClient,
     SupabaseConfig,
@@ -227,53 +233,58 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                     break
                 continue
 
-            # Run the orchestrator on this utterance.
+            # Run the STREAMING orchestrator — audio chunks arrive as
+            # sentences are generated, so the lead hears Priya's first
+            # sentence ~1.5s after they stop talking (vs 8-10s sequential).
             wav = mulaw_to_wav_for_stt(bytes(buffer), sample_rate=8000)
             buffer.clear()
             buffered_ms = 0
             silence_ms = 0
 
-            try:
-                result = await run_turn(
-                    ctx=active.ctx,
-                    audio_in=wav,
-                    deps=active.deps,
-                    prior_slots=active.slots,
-                )
-            except Exception:
-                logger.exception("call_id=%s orchestrator failure; continuing", call_id)
-                continue
-
-            active.slots = result.slots
-
-            persist_turn_async(
-                active.db,
-                call_id=active.ctx.call_id,
-                tenant_id=active.ctx.tenant_id,
-                lead_id=active.ctx.lead_id,
-                turn_idx=active.ctx.turn_idx - 1,
-                lead_text=result.lead_text,
-                lead_lang=result.lead_lang,
-                priya_text=result.priya_text,
-                slots_row=result.slots.to_db_row(
-                    call_id=active.ctx.call_id,
-                    tenant_id=active.ctx.tenant_id,
-                    lead_id=active.ctx.lead_id,
-                    turn_idx=active.ctx.turn_idx - 1,
-                ),
-                latency=result.latency_ms,
+            streaming_deps = StreamingDependencies(
+                stt=active.deps.stt,
+                tts=active.deps.tts,
+                llm=active.deps.llm,
+                r2_reader=active.deps.r2_reader,
+                r2_writer=active.deps.r2_writer,
+                voice_id=active.deps.voice_id,
             )
 
-            if result.bridge_audio:
-                try:
-                    await session.send_audio(tts_wav_to_mulaw_8k(result.bridge_audio))
-                except Exception:
-                    logger.exception("bridge audio send failed")
-
             try:
-                await session.send_audio(tts_wav_to_mulaw_8k(result.priya_audio))
+                async for event in run_turn_streaming(
+                    ctx=active.ctx,
+                    audio_in=wav,
+                    deps=streaming_deps,
+                    prior_slots=active.slots,
+                ):
+                    if isinstance(event, AudioChunkEvent):
+                        try:
+                            await session.send_audio(
+                                tts_wav_to_mulaw_8k(event.audio)
+                            )
+                        except Exception:
+                            logger.exception("audio chunk send failed")
+                    elif isinstance(event, TurnCompleteEvent):
+                        active.slots = event.slots
+                        persist_turn_async(
+                            active.db,
+                            call_id=active.ctx.call_id,
+                            tenant_id=active.ctx.tenant_id,
+                            lead_id=active.ctx.lead_id,
+                            turn_idx=active.ctx.turn_idx - 1,
+                            lead_text=event.lead_text,
+                            lead_lang=event.lead_lang,
+                            priya_text=event.priya_full_text,
+                            slots_row=event.slots.to_db_row(
+                                call_id=active.ctx.call_id,
+                                tenant_id=active.ctx.tenant_id,
+                                lead_id=active.ctx.lead_id,
+                                turn_idx=active.ctx.turn_idx - 1,
+                            ),
+                            latency=event.latency_ms,
+                        )
             except Exception:
-                logger.exception("priya audio send failed")
+                logger.exception("call_id=%s streaming orchestrator failure", call_id)
 
             if active.ctx.should_hard_stop():
                 await session.send_clear()

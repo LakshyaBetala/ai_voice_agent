@@ -58,6 +58,9 @@ class FakeLLM:
     async def respond(self, system_message: str, user_message: str) -> str:
         return "Theek hai, batayie."
 
+    async def stream_respond(self, system_message: str, user_message: str):
+        yield "Theek hai, batayie."
+
     async def extract(self, prompt: str) -> str:
         return '{"buying_confidence": 0.5}'
 
