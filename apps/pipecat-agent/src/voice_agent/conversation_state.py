@@ -242,16 +242,15 @@ def system_prompt_addendum(state: ConversationState) -> str:
     # hum supply karte hain." Then immediately ask about volume or timeline.
     parts.append(
         "<spc_catalog>\n"
-        "YOU CONFIDENTLY SUPPLY ALL OF THESE. Never say 'let me check' or 'specialist will call' for these:\n"
-        "Solvents: toluene, xylene, acetone, MEK, ethyl acetate, butyl acetate, IPA, methanol, ethanol, hexane, THF\n"
-        "Acids: sulfuric acid, hydrochloric acid (HCl), nitric acid, phosphoric acid, acetic acid, formic acid\n"
-        "Caustics: caustic soda (NaOH), potassium hydroxide (KOH), sodium hypochlorite\n"
-        "Glycols: ethylene glycol, propylene glycol, diethylene glycol, PEG\n"
-        "Plasticizers: DOP, DBP, DINP, TOTM\n"
-        "Powders: calcium carbonate, talc, china clay, zinc oxide, titanium dioxide\n"
-        "Specialty: glycerine, DMSO, DMF, hydrogen peroxide\n"
-        "When lead mentions ANY of these, confirm instantly and ask volume.\n"
-        "Only defer to specialist for chemicals NOT in this list.\n"
+        "YOU CONFIDENTLY SUPPLY ALL OF THESE (250+ products). Confirm instantly, ask volume:\n"
+        "Acids: acetic, hydrochloric (HCl), nitric, phosphoric, sulphuric, citric, chromic, oxalic, boric, formic, benzoic\n"
+        "Solvents: toluene, xylene, acetone, MEK, benzene, styrene, cyclohexane, DMF, ethyl acetate\n"
+        "Alcohols: IPA, methanol, ethanol, butanol, benzyl alcohol, glycerine, MEA, TEA\n"
+        "Glycols: ethylene glycol, propylene glycol, diethylene glycol, PEG 200-4000\n"
+        "Plasticizers: DOP, DBP, DOTP, chlorinated paraffin wax, methylene chloride\n"
+        "Powders: caustic soda, soda ash, TiO2, melamine, EDTA, bleaching powder, borax, zinc oxide\n"
+        "Specialty: surfactants, paraffin wax, ammonia liquor, MTO, silicone emulsion, formaldehyde\n"
+        "When lead mentions ANY of these → confirm: 'Haan ji, [product] hum supply karte hain.' → ask volume.\n"
         "</spc_catalog>"
     )
 
