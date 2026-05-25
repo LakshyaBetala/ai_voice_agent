@@ -26,7 +26,7 @@ def test_build_payload_sets_system_and_user_messages():
     assert payload["contents"][0]["parts"][0]["text"] == "hi"
     assert payload["contents"][0]["role"] == "user"
     # Default generation config should be present.
-    assert payload["generationConfig"]["maxOutputTokens"] == 500
+    assert payload["generationConfig"]["maxOutputTokens"] == 1000
 
 
 def test_build_payload_merges_custom_config():

@@ -229,6 +229,20 @@ def system_prompt_addendum(state: ConversationState) -> str:
     """
     parts: list[str] = []
 
+    # Hard brevity rule — repeated EVERY turn because the LLM drifts toward
+    # verbosity without it. Every word of Priya's response costs ~150-200ms
+    # of TTS time on top of the network round-trip. So one short sentence
+    # is the difference between a 1.5s turn and a 5s turn.
+    parts.append(
+        "<response_format>\n"
+        "CRITICAL HARD RULE — Reply in ONE short sentence, max 15 words.\n"
+        "If you want to say two things, pick the more important one and drop the other.\n"
+        "Lead the sentence with ONE natural filler ('haan ji', 'achha', 'right', 'okay', 'sari').\n"
+        "Never ask two questions in one turn. Never list options. Never explain SPC's offerings unprompted.\n"
+        "This is a phone call — sound like Priya speaking, not Priya writing.\n"
+        "</response_format>"
+    )
+
     parts.append(f"<current_phase>{state.phase.value}</current_phase>")
 
     if state.used_acknowledgments:

@@ -40,7 +40,7 @@ DEFAULT_TIMEOUT_SECONDS = 8.0
 DEFAULT_GENERATION_CONFIG: dict[str, Any] = {
     "temperature": 0.7,
     "topP": 0.9,
-    "maxOutputTokens": 500,
+    "maxOutputTokens": 1000,  # Safety ceiling. Brevity is enforced by prompt.
     "stopSequences": [],
 }
 
