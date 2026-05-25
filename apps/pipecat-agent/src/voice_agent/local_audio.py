@@ -143,38 +143,78 @@ def wav_bytes_to_pcm(wav_bytes: bytes) -> tuple[bytes, int]:
 
 # -- Press-ENTER mic capture (sync loop on a thread) -----------------------
 
-def record_until_enter() -> bytes:
-    """Block stdin, record from default mic until ENTER pressed.
-
-    Returns raw int16 PCM at SAMPLE_RATE_HZ, mono. Uses sounddevice. Falls
-    back with a clear message if sounddevice isn't installed.
-    """
+def _get_sounddevice():
     try:
         import sounddevice as sd  # type: ignore[import-not-found]
         import numpy as np  # type: ignore[import-not-found]
+        return sd, np
     except ImportError:
         raise SystemExit(
             "Local audio needs sounddevice + numpy. Install:\n"
             "  pip install sounddevice numpy"
         )
 
+
+def list_audio_devices() -> None:
+    """Print available audio devices so the user can pick the right mic."""
+    sd, _ = _get_sounddevice()
+    print("\n=== Audio devices ===")
+    print(sd.query_devices())
+    default_in = sd.query_devices(kind="input")
+    print(f"\nDefault INPUT: {default_in['name']} (index {default_in['index']})")
+    print()
+
+
+def record_until_enter(device: int | None = None) -> bytes:
+    """Block stdin, record from mic until ENTER pressed.
+
+    Returns raw int16 PCM at SAMPLE_RATE_HZ, mono. Uses sounddevice.
+    """
+    sd, np = _get_sounddevice()
+
+    # Show which device we're using so the user knows the mic is right.
+    if device is None:
+        dev_info = sd.query_devices(kind="input")
+    else:
+        dev_info = sd.query_devices(device)
+    print(f"[mic: {dev_info['name']}]")
+
     chunks: list[Any] = []
+    peak_level = [0.0]
 
     def _cb(indata, frames, time_info, status):  # noqa: ANN001
         chunks.append(indata.copy())
+        level = np.abs(indata).max()
+        if level > peak_level[0]:
+            peak_level[0] = level
 
-    print("[recording — press ENTER to stop]")
-    with sd.InputStream(
-        samplerate=SAMPLE_RATE_HZ,
-        channels=CHANNELS,
-        dtype="int16",
-        callback=_cb,
-    ):
-        input()  # block until user hits enter
+    print("[recording — speak now, press ENTER to stop]")
+    try:
+        with sd.InputStream(
+            samplerate=SAMPLE_RATE_HZ,
+            channels=CHANNELS,
+            dtype="int16",
+            device=device,
+            callback=_cb,
+            blocksize=1024,
+        ):
+            input()  # block until user hits enter
+    except sd.PortAudioError as exc:
+        print(f"[mic error: {exc}]")
+        print("[try: python -m voice_agent.local_audio --list-devices]")
+        return b""
 
     if not chunks:
+        print("[no audio chunks captured — mic may be muted or wrong device]")
         return b""
+
     pcm = np.concatenate(chunks).tobytes()
+    duration_ms = len(pcm) / (SAMPLE_RATE_HZ * SAMPLE_WIDTH_BYTES) * 1000
+    print(f"[captured {duration_ms:.0f}ms, peak={peak_level[0]}]")
+
+    if peak_level[0] < 50:
+        print("[WARNING: very low audio level — mic may be muted]")
+
     return pcm
 
 
@@ -246,6 +286,10 @@ class _NoOpR2:
 
 
 async def run_local(args: argparse.Namespace) -> None:
+    if args.list_devices:
+        list_audio_devices()
+        return
+
     env = _load_env()
     async with httpx.AsyncClient(timeout=15.0) as http:
         deps = _build_deps(env, http)
@@ -265,11 +309,29 @@ async def run_local(args: argparse.Namespace) -> None:
             f"Hard cap: {HARD_CAP_SECONDS}s. Type 'q' + ENTER to quit.\n"
         )
 
+        # ---- PRIYA STARTS FIRST (like a real outbound call) ----
+        # On a real call, Priya delivers the intro BEFORE the lead speaks.
+        from .prompts import build_intro_text
+        intro_text = build_intro_text(lang=args.lang, first_name=args.lead_name)
+        print(f"  PRIYA (intro): Synthesizing...")
+        try:
+            intro_audio = await deps.tts.synth(intro_text, args.lang)
+            print(f"  PRIYA: {intro_text}")
+            try:
+                intro_pcm, intro_sr = wav_bytes_to_pcm(intro_audio)
+                play_pcm(intro_pcm, intro_sr)
+            except Exception:
+                print("  [intro playback failed]")
+        except Exception as exc:
+            print(f"  [intro TTS failed: {exc}]")
+        print()
+
         slots = QualificationSlots()
         sdeps = StreamingDependencies(
             stt=deps.stt, tts=deps.tts, llm=deps.llm,
             r2_reader=deps.r2_reader, r2_writer=deps.r2_writer,
         )
+        device = args.device
 
         while True:
             if ctx.should_hard_stop():
@@ -280,9 +342,9 @@ async def run_local(args: argparse.Namespace) -> None:
             if line.lower() == "q":
                 break
 
-            pcm = record_until_enter()
+            pcm = record_until_enter(device=device)
             if not pcm:
-                print("[empty recording — skipped]")
+                print("[empty recording — check mic. Try: --list-devices]")
                 continue
 
             wav = pcm_to_wav_bytes(pcm)
@@ -335,6 +397,8 @@ def main() -> None:
     p.add_argument("--lead-name", default="Suresh")
     p.add_argument("--lead-company", default="Acme Chemicals")
     p.add_argument("--tenant-id", default="local-test-tenant")
+    p.add_argument("--list-devices", action="store_true", help="List audio devices and exit")
+    p.add_argument("--device", type=int, default=None, help="Input device index (from --list-devices)")
     args = p.parse_args()
     asyncio.run(run_local(args))
 
