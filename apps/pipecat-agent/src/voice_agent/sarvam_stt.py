@@ -43,7 +43,12 @@ from typing import Any
 
 import httpx
 
-SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text-translate"
+# IMPORTANT: /speech-to-text returns text in the SPOKEN language (with a
+# language_code label). /speech-to-text-translate auto-translates to English
+# and discards the original language — bad for our use case because we want
+# the LLM to read what the lead actually said so it can mirror their phrasing.
+SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
+SARVAM_STT_TRANSLATE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 DEFAULT_MODEL = "saaras:v3"
 DEFAULT_TIMEOUT_SECONDS = 8.0  # Telephony: must beat 1s p95 budget for short clips.
 

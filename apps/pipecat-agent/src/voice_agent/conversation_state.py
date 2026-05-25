@@ -229,18 +229,41 @@ def system_prompt_addendum(state: ConversationState) -> str:
     """
     parts: list[str] = []
 
-    # Hard brevity rule — repeated EVERY turn because the LLM drifts toward
-    # verbosity without it. Every word of Priya's response costs ~150-200ms
-    # of TTS time on top of the network round-trip. So one short sentence
-    # is the difference between a 1.5s turn and a 5s turn.
     parts.append(
         "<response_format>\n"
-        "CRITICAL HARD RULE — Reply in ONE short sentence, max 15 words.\n"
-        "If you want to say two things, pick the more important one and drop the other.\n"
-        "Lead the sentence with ONE natural filler ('haan ji', 'achha', 'right', 'okay', 'sari').\n"
-        "Never ask two questions in one turn. Never list options. Never explain SPC's offerings unprompted.\n"
-        "This is a phone call — sound like Priya speaking, not Priya writing.\n"
+        "CRITICAL — Reply in ONE short sentence, max 15 words.\n"
+        "Lead with a filler ('haan ji', 'achha', 'right', 'sari').\n"
+        "Never ask two questions. Never list products. Never explain offerings unprompted.\n"
         "</response_format>"
+    )
+
+    # SPC product catalog — Priya KNOWS these. Never defer to a specialist
+    # for any chemical listed here. Confirm confidently: "Haan ji, toluene
+    # hum supply karte hain." Then immediately ask about volume or timeline.
+    parts.append(
+        "<spc_catalog>\n"
+        "YOU CONFIDENTLY SUPPLY ALL OF THESE. Never say 'let me check' or 'specialist will call' for these:\n"
+        "Solvents: toluene, xylene, acetone, MEK, ethyl acetate, butyl acetate, IPA, methanol, ethanol, hexane, THF\n"
+        "Acids: sulfuric acid, hydrochloric acid (HCl), nitric acid, phosphoric acid, acetic acid, formic acid\n"
+        "Caustics: caustic soda (NaOH), potassium hydroxide (KOH), sodium hypochlorite\n"
+        "Glycols: ethylene glycol, propylene glycol, diethylene glycol, PEG\n"
+        "Plasticizers: DOP, DBP, DINP, TOTM\n"
+        "Powders: calcium carbonate, talc, china clay, zinc oxide, titanium dioxide\n"
+        "Specialty: glycerine, DMSO, DMF, hydrogen peroxide\n"
+        "When lead mentions ANY of these, confirm instantly and ask volume.\n"
+        "Only defer to specialist for chemicals NOT in this list.\n"
+        "</spc_catalog>"
+    )
+
+    # Conversion aggression — Priya LEADS, never passively waits.
+    parts.append(
+        "<conversion_rule>\n"
+        "YOU lead the conversation. Never wait passively. Every response must either:\n"
+        "1. Confirm a product and ask volume ('Haan ji, toluene supply karte hain. Monthly kitna chahiye?')\n"
+        "2. Ask a qualifying question ('Aap currently kahan se lete hain?')\n"
+        "3. Push toward a close ('Main 4 ghante mein quote bhej deti hoon, email diyiye')\n"
+        "Never say 'how can I help you' or 'tell me more'. YOU already know what SPC offers — pitch it.\n"
+        "</conversion_rule>"
     )
 
     parts.append(f"<current_phase>{state.phase.value}</current_phase>")
