@@ -277,10 +277,17 @@ async def run_local(args: argparse.Namespace) -> None:
 
             print(f"\n  LEAD ({result.lead_lang}): {result.lead_text}")
             print(f"  PRIYA: {result.priya_text}")
+            lm = result.latency_ms
             print(
                 f"  [turn={ctx.turn_idx}  phase={ctx.conversation_state.phase.value}  "
-                f"wall={wall_ms}ms  cache_hits={ctx.phrase_cache_hits}  "
+                f"phrase_cached={result.used_phrase_cache}  "
                 f"buying_conf={slots.buying_confidence:.2f}]"
+            )
+            print(
+                f"  [latency  stt={lm.get('stt_ms', 0)}ms  "
+                f"llm={lm.get('llm_ms', 0)}ms  "
+                f"tts={lm.get('tts_ms', 0)}ms  "
+                f"total_orch={lm.get('total_ms', 0)}ms  wall={wall_ms}ms]"
             )
 
             if result.bridge_audio:

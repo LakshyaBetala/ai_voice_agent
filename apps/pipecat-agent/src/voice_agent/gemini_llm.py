@@ -34,11 +34,13 @@ GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_TIMEOUT_SECONDS = 8.0
 
 # Telephony tuning: short, conversational replies. We do NOT want
-# essays here — Priya speaks in 1-2 sentence beats.
+# essays here — Priya speaks in 1-2 sentence beats. 500 tokens fits
+# ~2-3 Hindi/Tamil sentences (Indic scripts cost ~2 tokens/syllable);
+# 200 was too tight and truncated mid-sentence.
 DEFAULT_GENERATION_CONFIG: dict[str, Any] = {
     "temperature": 0.7,
     "topP": 0.9,
-    "maxOutputTokens": 200,
+    "maxOutputTokens": 500,
     "stopSequences": [],
 }
 
