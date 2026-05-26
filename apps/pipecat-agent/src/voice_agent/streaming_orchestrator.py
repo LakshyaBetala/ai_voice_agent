@@ -167,20 +167,7 @@ async def run_turn_streaming(
         buying_confidence=prior_slots.buying_confidence,
     )
 
-    # ---- 3. Bridge audio on language flip (yield first) ----------------
-    if transition.switched and transition.bridge_phrase:
-        bridge = await load_or_synthesize_phrase(
-            text=transition.bridge_phrase,
-            lang=transition.current_language.value,
-            r2_reader=deps.r2_reader,
-            r2_writer=deps.r2_writer,
-            synthesize=lambda t, l: deps.tts.synth(t, l),
-            voice_id=deps.voice_id,
-        )
-        yield AudioChunkEvent(
-            audio=bridge.audio, text=transition.bridge_phrase,
-            sentence_idx=-1, used_cache=bridge.used_cache,
-        )
+    # ---- 3. Language flip — no bridge phrase, just switch silently ------
 
     # ---- 4. Build system message (same as sequential) ------------------
     base_prompt = _cached_prompt()
@@ -201,7 +188,8 @@ async def run_turn_streaming(
         system_msg += f"\n\n<call_context>{context_summary}</call_context>"
 
     user_msg = _format_user_message(
-        stt_result.transcript, prior_slots, ctx.conversation_state
+        stt_result.transcript, prior_slots, ctx.conversation_state,
+        lang=transition.current_language.value,
     )
 
     # ---- 5. Start streaming LLM + slot extraction in parallel ----------
@@ -386,16 +374,23 @@ def _pain_hypothesis_for_turn(ctx, slots, lang: str) -> Optional[str]:
     )
 
 
-def _format_user_message(lead_text, slots, conv):
+def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
     turn = len(conv.recent_priya_turns)
     is_silence = "silence" in lead_text.lower() or not lead_text.strip()
 
     parts = []
 
     if turn == 0:
-        parts.append('[Turn 1. You ALREADY said namaste and introduced yourself. DO NOT introduce yourself again. Just respond to what the lead said.]')
+        parts.append('[Turn 1. You ALREADY introduced yourself. DO NOT introduce again. Just respond.]')
     else:
         parts.append(f'[Turn {turn + 1}. NO greeting. NO intro.]')
+
+    if lang == "ta-IN":
+        parts.append('RESPOND IN TANGLISH (Tamil+English). Example: "Sari sir, toluene supply pannurom. Monthly evvalavu volume venum?" Use Tamil grammar, English business words.')
+    elif lang == "en-IN":
+        parts.append('RESPOND IN ENGLISH. Professional but friendly.')
+    else:
+        parts.append('RESPOND IN HINGLISH (Hindi+English mix).')
 
     if is_silence:
         if turn < 2:
@@ -415,8 +410,9 @@ def _format_user_message(lead_text, slots, conv):
     if conv.consecutive_close_attempts >= 2:
         parts.append("Lead rejected twice. Say goodbye and END.")
 
-    parts.append('BANNED WORDS: आवश्यकता, उत्पाद, सहायता, कृपया. Use English instead: requirement, products, help, please.')
-    parts.append("Respond naturally. Not a prospect = exit gracefully.")
+    if lang != "ta-IN":
+        parts.append('BANNED: आवश्यकता, उत्पाद, सहायता, कृपया.')
+    parts.append("Not a prospect = exit gracefully.")
     return "\n".join(parts)
 
 
