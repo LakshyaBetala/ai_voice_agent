@@ -27,7 +27,8 @@ class TestBuildIntroText:
 
     def test_hindi_with_name(self):
         out = build_intro_text(lang="hi-IN", first_name="Sunil")
-        assert "Sunil ji" in out
+        assert "Sunil" in out
+        assert "Supreme Petrochemicals" in out
 
     def test_tamil_with_name(self):
         out = build_intro_text(lang="ta-IN", first_name="Karthik")

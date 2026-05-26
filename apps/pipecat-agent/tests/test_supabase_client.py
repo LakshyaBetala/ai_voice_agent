@@ -115,7 +115,8 @@ async def test_insert_transcript_posts_with_speaker_and_text():
     assert captured["body"]["speaker"] == "lead"
     assert captured["body"]["text"] == "haan ji"
     assert captured["body"]["lang"] == "hi-IN"
-    assert captured["body"]["turn_idx"] == 2
+    assert captured["body"]["idx"] == 2
+    assert captured["body"]["ts_ms"] == 20000
 
 
 @pytest.mark.asyncio

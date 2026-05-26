@@ -134,26 +134,66 @@ class AgentSupabaseClient:
         self, *, call_id: str, speaker: str, text: str,
         lang: str | None = None, turn_idx: int = 0,
     ) -> None:
+        db_speaker = "agent" if speaker == "priya" else speaker
         await self._post("transcripts", {
             "call_id": call_id,
-            "speaker": speaker,
+            "speaker": db_speaker,
             "text": text,
             "lang": lang,
-            "turn_idx": turn_idx,
-            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "ts_ms": turn_idx * 10000,
+            "idx": turn_idx,
         })
 
     async def update_call_status(
         self, *, call_id: str, status: str,
-        duration_sec: int | None = None,
+        duration_sec: float | None = None,
         billed_units: int | None = None,
+        turns: int | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         payload: dict[str, Any] = {"status": status}
         if duration_sec is not None:
-            payload["duration_sec"] = duration_sec
+            payload["duration_sec"] = int(duration_sec)
         if billed_units is not None:
-            payload["billed_units"] = billed_units
+            payload["billed_units"] = min(billed_units, 2)
+        if status == "completed":
+            payload["ended_at"] = datetime.now(timezone.utc).isoformat()
         await self._patch("calls", {"id": call_id}, payload)
+
+    async def insert_call(
+        self, *, call_id: str, tenant_id: str, lead_id: str,
+        lang: str = "hi-IN",
+    ) -> None:
+        await self._post("calls", {
+            "id": call_id,
+            "tenant_id": tenant_id,
+            "lead_id": lead_id,
+            "status": "in_progress",
+            "kind": "ai_outbound",
+            "language_used": lang,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+
+    async def insert_lead_score(
+        self, *, lead_id: str, call_id: str,
+        classification: str, score: int,
+        reason: str, summary: str,
+        next_action: str | None = None,
+        extracted: dict | None = None,
+    ) -> None:
+        import json as _json
+        await self._post("lead_scores", {
+            "lead_id": lead_id,
+            "call_id": call_id,
+            "classification": classification,
+            "score_0_100": score,
+            "reason": reason,
+            "summary": summary,
+            "next_action": next_action or "",
+            "extracted": _json.dumps(extracted or {}),
+            "call_quality_flags": "{}",
+        })
 
 
 # -- Fire-and-forget helpers ------------------------------------------------

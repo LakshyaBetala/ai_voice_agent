@@ -60,13 +60,14 @@ def build_intro_text(*, lang: str, first_name: str | None) -> str:
     if lang == "hi-IN":
         if name:
             return (
-                f"Haan ji namaste, {name} ji? Mai Priya bol rahi hu, "
-                "Supreme Petrochemicals Chennai se. Kya mai aapke do minute le sakti hu "
-                "chemicals supply ke baare me?"
+                f"हाँ जी नमस्ते, {name} जी? मैं Priya, "
+                "Supreme Petrochemicals Chennai से बोल रही हूँ। "
+                "Sir, बस दो मिनट — आपकी chemicals requirement के बारे में बात करनी थी?"
             )
         return (
-            "Haan ji namaste, mai Priya bol rahi hu Supreme Petrochemicals "
-            "Chennai se. Kya mai aapke do minute le sakti hu?"
+            "नमस्ते जी, मैं Priya बोल रही हूँ "
+            "Supreme Petrochemicals Chennai से। "
+            "Sir, बस दो मिनट — chemicals supply के बारे में बात करनी थी?"
         )
     # ta-IN
     if name:

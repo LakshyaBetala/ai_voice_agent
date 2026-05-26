@@ -74,6 +74,7 @@ class OutboundCallRequest:
     from_: str  # ExoPhone (Exotel-provided caller ID)
     stream_url: str  # WSS URL Exotel will connect to once answered
     custom_field: str | None = None  # echoed back; we put call_id here
+    status_callback: str | None = None  # POST'd by Exotel when call ends
     record: bool = True
     time_limit_seconds: int = 360  # matches HARD_CAP_SECONDS
 
@@ -119,6 +120,8 @@ async def place_outbound_call(
     }
     if request.custom_field:
         form["CustomField"] = request.custom_field
+    if request.status_callback:
+        form["StatusCallback"] = request.status_callback
 
     owns_client = client is None
     http = client or httpx.AsyncClient(timeout=timeout)

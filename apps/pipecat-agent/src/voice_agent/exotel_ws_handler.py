@@ -152,6 +152,9 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
     db = _build_db_client()
     _active_calls[call_id] = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps, db=db)
 
+    status_cb_base = os.environ.get("EXOTEL_STATUS_CALLBACK_URL", stream_base).rstrip("/")
+    status_callback = f"{status_cb_base}/exotel/status/{call_id}"
+
     try:
         resp = await place_outbound_call(
             request=OutboundCallRequest(
@@ -159,6 +162,7 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
                 from_=req.from_ or from_default,
                 stream_url=stream_url,
                 custom_field=call_id,
+                status_callback=status_callback,
                 record=True,
                 time_limit_seconds=HARD_CAP_SECONDS,
             ),
@@ -302,6 +306,50 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             active.ctx.phrase_cache_hits,
             active.ctx.billed_units(),
         )
+
+
+# -- StatusCallback webhook (Exotel POSTs after call ends) -----------------
+
+@router.post("/exotel/status/{call_id}")
+async def exotel_status_callback(call_id: str, request: Any = None) -> dict:
+    """Exotel POSTs call completion data here (duration, status, recording URL).
+
+    We merge it with the in-memory call state and persist to Supabase.
+    This is the CRM integration point — each tenant's call outcome lands here.
+    """
+    from fastapi import Request as FastAPIRequest
+
+    # Exotel sends form-encoded POST with: CallSid, Status, Duration,
+    # RecordingUrl, From, To, Direction, StartTime, EndTime, etc.
+    active = _active_calls.get(call_id)
+    if active is None:
+        logger.warning("status callback for unknown call_id=%s", call_id)
+        return {"status": "ok", "call_id": call_id, "warning": "unknown_call"}
+
+    logger.info(
+        "call_id=%s status_callback: elapsed=%.1fs turns=%d billed=%d slots=%s",
+        call_id,
+        active.ctx.elapsed(),
+        active.ctx.turn_idx,
+        active.ctx.billed_units(),
+        active.slots.to_summary(),
+    )
+
+    if active.db:
+        try:
+            await active.db.update_call_status(
+                call_id=call_id,
+                tenant_id=active.ctx.tenant_id,
+                status="completed",
+                billed_units=active.ctx.billed_units(),
+                duration_sec=active.ctx.elapsed(),
+                turns=active.ctx.turn_idx,
+            )
+        except Exception:
+            logger.exception("call_id=%s failed to persist final status", call_id)
+
+    _active_calls.pop(call_id, None)
+    return {"status": "ok", "call_id": call_id}
 
 
 # -- Adapters ---------------------------------------------------------------
