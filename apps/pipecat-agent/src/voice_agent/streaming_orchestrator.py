@@ -380,41 +380,30 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
     parts = []
 
     if turn == 0:
-        parts.append('[Turn 1. You ALREADY introduced yourself. DO NOT introduce again. Just respond.]')
+        parts.append('[Intro DONE. DO NOT say your name or company. Directly respond.]')
     else:
-        parts.append(f'[Turn {turn + 1}. NO greeting. NO intro.]')
+        parts.append(f'[Turn {turn + 1}]')
 
     if lang == "ta-IN":
-        parts.append('TANGLISH ONLY. NO Hindi words (no achha, no koi baat nahi, no bilkul). '
-                     'DO NOT start with "Sari sir nandri" — nandri means thank you, only use when ending call. '
-                     'Start with: "Sari sir" / "Aama" / "Sir" / direct response. '
-                     'Examples: "Sari sir, toluene supply ready ah irukku." / "Enga delivery fast ah irukku." / "Bulk la 8-15% savings kidaikkum."')
+        parts.append('[TANGLISH. ZERO Hindi words. sari/aama/sir only.]')
     elif lang == "en-IN":
-        parts.append('ENGLISH only. Professional but friendly.')
+        parts.append('[ENGLISH]')
     else:
-        parts.append('HINGLISH (Hindi+English mix). Use "Achha/Ji/Bilkul".')
+        parts.append('[HINGLISH]')
 
     if is_silence:
-        if turn < 2:
-            parts.append('Lead silent. Say: "Sir, awaaz nahi aa rahi. Sun pa rahe hain?"')
-        else:
-            parts.append('Lead silent. Say: "Sir, connection weak hai. Kal call karun?"')
+        parts.append('Lead silent → ask if they can hear you.')
     else:
         parts.append(f'Lead: "{lead_text}"')
         if slots.product_interest:
-            parts.append(f"Known: {slots.product_interest}")
+            parts.append(f"Products: {slots.product_interest}")
 
     if slots.buying_confidence >= 0.7:
-        parts.append("HIGH signal. Close: quote/WhatsApp.")
-    elif slots.buying_confidence >= 0.4:
-        parts.append("Medium. Build value.")
+        parts.append("CLOSE NOW → isi number pe WhatsApp pe quote.")
+    elif conv.consecutive_close_attempts >= 2:
+        parts.append("Two rejections → say goodbye.")
 
-    if conv.consecutive_close_attempts >= 2:
-        parts.append("Lead rejected twice. Say goodbye and END.")
-
-    if lang != "ta-IN":
-        parts.append('BANNED: आवश्यकता, उत्पाद, सहायता, कृपया.')
-    parts.append("NEVER invent volumes or prices lead didn't say. NEVER repeat same selling point twice. Exit gracefully if not a prospect.")
+    parts.append("You are SELLING. Connect with their need. Give ONE value point. Push forward.")
     return "\n".join(parts)
 
 

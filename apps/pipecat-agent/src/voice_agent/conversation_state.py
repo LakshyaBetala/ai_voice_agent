@@ -230,8 +230,9 @@ def system_prompt_addendum(state: ConversationState) -> str:
     parts: list[str] = []
 
     parts.append(
-        "<format>Hinglish. Short and natural — 1-2 sentences, like a real phone call. "
-        "NO formal Hindi. NO greeting/namaste. Start with: achha/ji/bilkul/sir/dekhiye.</format>"
+        "<format>Short and natural — 1-2 sentences. NO formal Hindi. "
+        "NEVER say your name or company name — lead already knows. "
+        "NEVER say namaste or greeting. Start with: achha/ji/sir/dekhiye.</format>"
     )
 
     parts.append(f"<current_phase>{state.phase.value}</current_phase>")
