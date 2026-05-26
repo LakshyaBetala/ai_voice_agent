@@ -139,8 +139,9 @@ async def run_turn_streaming(
 
     is_echo = False
     if raw_transcript and ctx.conversation_state.recent_priya_turns:
-        for prev in ctx.conversation_state.recent_priya_turns[-2:]:
-            if len(raw_transcript) > 10 and raw_transcript[:20] in prev:
+        for prev in ctx.conversation_state.recent_priya_turns[-3:]:
+            overlap = _text_overlap(raw_transcript, prev)
+            if overlap > 0.4:
                 is_echo = True
                 break
 
@@ -194,6 +195,10 @@ async def run_turn_streaming(
     pain = _pain_hypothesis_for_turn(ctx, prior_slots, transition.current_language.value)
     if pain:
         system_msg += f"\n\n<pain_hypothesis>{pain}</pain_hypothesis>"
+
+    context_summary = _build_context_summary(prior_slots, ctx)
+    if context_summary:
+        system_msg += f"\n\n<call_context>{context_summary}</call_context>"
 
     user_msg = _format_user_message(
         stt_result.transcript, prior_slots, ctx.conversation_state
@@ -326,6 +331,37 @@ def _cached_prompt() -> str:
     if not _PROMPT_CACHE:
         _PROMPT_CACHE = load_priya_prompt()
     return _PROMPT_CACHE
+
+
+def _text_overlap(a: str, b: str) -> float:
+    """Fraction of words in `a` that also appear in `b`. Used for echo detection."""
+    if not a or not b:
+        return 0.0
+    words_a = set(a.lower().split())
+    words_b = set(b.lower().split())
+    if not words_a:
+        return 0.0
+    return len(words_a & words_b) / len(words_a)
+
+
+def _build_context_summary(slots, ctx) -> str:
+    """Build a running summary of what's known so far. Prevents re-asking."""
+    parts = []
+    if slots.product_interest:
+        parts.append(f"Products discussed: {slots.product_interest}")
+    if slots.volume_monthly_kg and slots.volume_monthly_kg > 0:
+        parts.append(f"Volume: {slots.volume_monthly_kg} kg/month")
+    if slots.current_supplier:
+        parts.append(f"Current supplier: {slots.current_supplier}")
+    if slots.pain_point:
+        parts.append(f"Pain: {slots.pain_point}")
+    if slots.decision_role:
+        parts.append(f"Role: {slots.decision_role}")
+    if slots.contact_info:
+        parts.append(f"Contact: {slots.contact_info}")
+    if parts:
+        parts.append("DO NOT re-ask anything already captured above.")
+    return " | ".join(parts) if parts else ""
 
 
 def _coerce_lang(code: str) -> Lang | None:

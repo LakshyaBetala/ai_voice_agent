@@ -24,7 +24,7 @@ CARTESIA_VERSION = "2026-03-01"
 DEFAULT_MODEL = "sonic-3.5"
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
-HINDI_VOICES = {
+VOICES = {
     "arushi": "95d51f79-c397-46f9-b49a-23763d3eaa2d",
     "riya": "faf0731e-dfb9-4cfc-8119-259a79b27e12",
     "meera": "a81fccdc-5595-4dfc-ae76-4de6a515b8a2",
@@ -35,6 +35,21 @@ HINDI_VOICES = {
     "dev": "910fb75e-1d20-4840-ac63-ac6b26a71bdc",
     "vishal": "098fb15d-2597-4186-8b74-25340050b6e7",
     "ayush": "791d5162-d5eb-40f0-8189-f19db44611d8",
+    "nithya": "80e4e2b3-ec54-4930-97ac-667eba950352",
+    "anitha": "d4470f50-295e-4e11-82a2-158d45bf6abc",
+    "kavitha": "01d7796d-ac10-4ea3-8df0-3cc04f2d25ff",
+    "katie": "f786b574-daa5-4673-aa0c-cbe3e8534c02",
+}
+
+HINDI_VOICES = VOICES
+
+LANG_DEFAULT_VOICE: dict[str, str] = {
+    "hi-IN": "arushi",
+    "hi": "arushi",
+    "ta-IN": "nithya",
+    "ta": "nithya",
+    "en-IN": "katie",
+    "en": "katie",
 }
 
 DEFAULT_VOICE = "arushi"
@@ -80,7 +95,11 @@ async def synthesize(
     if not api_key:
         raise CartesiaTTSError("missing CARTESIA_API_KEY")
 
-    voice_id = HINDI_VOICES.get(voice, voice)
+    if voice == DEFAULT_VOICE:
+        lang_voice = LANG_DEFAULT_VOICE.get(lang, LANG_DEFAULT_VOICE.get(_lang_code(lang), DEFAULT_VOICE))
+        voice_id = VOICES.get(lang_voice, VOICES.get(voice, voice))
+    else:
+        voice_id = VOICES.get(voice, voice)
 
     body = {
         "model_id": model,
