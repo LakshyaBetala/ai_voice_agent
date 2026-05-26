@@ -98,11 +98,6 @@ def build_system_message(
     name = lead_first_name.strip() if is_usable_first_name(lead_first_name) else ""
     company = (lead_company or "").strip()
     header = (
-        f"<current_language>{current_language}</current_language>\n"
-        f"<lead_first_name>{name}</lead_first_name>\n"
-        f"<lead_company>{company}</lead_company>\n"
-        "<rule>Respond ONLY in the language specified by current_language. "
-        "If the lead's last utterance switched languages, you'll have been "
-        "told to switch — do not drift back to the old language.</rule>\n\n"
+        f"<lang>{current_language}</lang> <lead>{name}</lead> <company>{company}</company>\n"
     )
     return header + base_prompt

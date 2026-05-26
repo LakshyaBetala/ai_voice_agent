@@ -105,14 +105,9 @@ class StreamingDependencies:
 
 # -- Sentence splitting ----------------------------------------------------
 
-# Hindi uses devanagari danda (।) as sentence ender. Also standard . ? !
 _SENTENCE_BOUNDARY = re.compile(r'(?<=[।.?!])\s+')
 
 def split_sentences(text: str) -> list[str]:
-    """Split text into sentences at natural boundaries.
-
-    Returns at least one element (the input, unsplit, if no boundaries found).
-    """
     parts = _SENTENCE_BOUNDARY.split(text.strip())
     return [p.strip() for p in parts if p.strip()]
 
@@ -337,13 +332,16 @@ def _pain_hypothesis_for_turn(ctx, slots, lang: str) -> Optional[str]:
 
 
 def _format_user_message(lead_text, slots, conv):
-    parts = [f"Lead just said: \"{lead_text}\""]
+    turn = len(conv.recent_priya_turns)
+    parts = [f'[Turn {turn + 1}. Intro already done. DO NOT greet or say namaste.]']
+    parts.append(f'Lead: "{lead_text}"')
     if slots.product_interest:
-        parts.append(f"Known product interest: {slots.product_interest}")
+        parts.append(f"Products mentioned: {slots.product_interest}")
     if slots.buying_confidence >= 0.7:
-        parts.append("Buying signal is STRONG. Move toward a commit question.")
+        parts.append("STRONG buying signal → push for quote/WhatsApp.")
     elif 0 < slots.buying_confidence <= 0.3:
-        parts.append("Buying signal is WEAK. Ask one open question or close politely.")
+        parts.append("Weak signal → one open question or polite close.")
+    parts.append("Reply in ONE Hindi sentence, max 12 words. Start with अच्छा/जी हाँ/बिल्कुल.")
     return "\n".join(parts)
 
 

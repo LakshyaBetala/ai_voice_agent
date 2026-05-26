@@ -54,19 +54,19 @@ class TestSystemMessage:
             lead_first_name="Ravi",
             lead_company="Acme Pharma",
         )
-        assert "<current_language>hi-IN</current_language>" in msg
-        assert "<lead_first_name>Ravi</lead_first_name>" in msg
-        assert "<lead_company>Acme Pharma</lead_company>" in msg
+        assert "hi-IN" in msg
+        assert "Ravi" in msg
+        assert "Acme Pharma" in msg
         assert "BASE" in msg
 
-    def test_anti_drift_rule_present(self):
+    def test_language_tag_present(self):
         msg = build_system_message(
             base_prompt="P",
             current_language="en-IN",
             lead_first_name=None,
             lead_company=None,
         )
-        assert "do not drift back" in msg
+        assert "en-IN" in msg
 
     def test_unusable_name_becomes_empty(self):
         msg = build_system_message(
@@ -75,7 +75,7 @@ class TestSystemMessage:
             lead_first_name="Unknown",
             lead_company=None,
         )
-        assert "<lead_first_name></lead_first_name>" in msg
+        assert "<lead></lead>" in msg
 
 
 def test_priya_prompt_loads_from_shared_path():

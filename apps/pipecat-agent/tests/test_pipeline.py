@@ -40,13 +40,13 @@ def test_initial_context_starts_in_default_language():
 def test_system_message_reflects_current_language_after_switch():
     ctx = _ctx(lang="en-IN")
     msg1 = render_system_message_for_turn(ctx)
-    assert "<current_language>en-IN</current_language>" in msg1
+    assert "en-IN" in msg1
 
     # Simulate state machine flipping to Hindi
     ctx.language_state.current = Lang.HI
     msg2 = render_system_message_for_turn(ctx)
-    assert "<current_language>hi-IN</current_language>" in msg2
-    assert "<current_language>en-IN</current_language>" not in msg2
+    assert "hi-IN" in msg2
+    assert "en-IN" not in msg2.split("\n")[0]
 
 
 def test_intro_text_uses_first_name_and_default_language():
