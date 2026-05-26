@@ -347,8 +347,11 @@ def _format_user_message(lead_text, slots, conv):
     parts = [f'[Turn {turn + 1}. NO greeting. NO namaste. NO formal Hindi.]']
 
     if is_silence:
-        parts.append('Lead was silent or unclear.')
-        parts.append('Say something like: "Hello sir, aapki awaaz nahi aa rahi. Kya aap sun rahe hain?"')
+        parts.append('Lead was silent or audio unclear.')
+        if turn < 2:
+            parts.append('Say: "Sir, aapki awaaz thodi unclear aa rahi hai. Kya aap mujhe sun pa rahe hain?"')
+        else:
+            parts.append('Say: "Sir, connection thoda weak lag raha hai. Main kal better time pe call karun?"')
     else:
         parts.append(f'Lead said: "{lead_text}"')
 

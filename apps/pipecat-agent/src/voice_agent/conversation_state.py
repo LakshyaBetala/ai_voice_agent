@@ -242,8 +242,13 @@ def system_prompt_addendum(state: ConversationState) -> str:
         parts.append(f"<used_acks>{used}</used_acks>")
 
     if state.recent_priya_turns:
-        last2 = state.recent_priya_turns[-2:]
-        parts.append(f"<recent>{' | '.join(last2)}</recent>")
+        last3 = state.recent_priya_turns[-3:]
+        parts.append(
+            f"<DO_NOT_REPEAT_THESE>\n"
+            + "\n".join(f"- {t}" for t in last3)
+            + "\n</DO_NOT_REPEAT_THESE>"
+            "\nYou MUST say something COMPLETELY DIFFERENT from all of the above."
+        )
 
     if state.filler_audit_failing():
         parts.append("<nudge>Add filler: ji/haan/achha</nudge>")

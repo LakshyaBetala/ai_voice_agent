@@ -216,10 +216,13 @@ def list_audio_devices() -> None:
     print()
 
 
+MIN_RECORDING_MS = 1500
+
 def record_until_enter(device: int | None = None) -> bytes:
-    """Record from mic until ENTER pressed. Uses sd.rec() which is the most
-    reliable approach on Windows — avoids the PortAudio callback bug where
-    the device locks after sd.play() finishes.
+    """Record from mic until ENTER pressed (minimum 1.5s).
+
+    Uses sd.rec() for Windows reliability. Enforces minimum duration
+    to avoid sending noise/clicks to STT.
     """
     sd, np = _get_sounddevice()
 
@@ -228,10 +231,10 @@ def record_until_enter(device: int | None = None) -> bytes:
     else:
         dev_info = sd.query_devices(device)
     print(f"[mic: {dev_info['name']}]")
-    print("[recording — speak now, press ENTER to stop]")
+    print("[recording — speak now, press ENTER when done]")
 
     sd.stop()
-    time.sleep(0.05)
+    time.sleep(0.15)
 
     max_seconds = 30
     recording = sd.rec(
@@ -241,11 +244,19 @@ def record_until_enter(device: int | None = None) -> bytes:
         dtype="int16",
         device=device,
     )
+    rec_start = time.monotonic()
 
     try:
         input()
     except EOFError:
         pass
+
+    elapsed_ms = (time.monotonic() - rec_start) * 1000
+    if elapsed_ms < MIN_RECORDING_MS:
+        remaining = (MIN_RECORDING_MS - elapsed_ms) / 1000
+        print(f"[keep talking... {remaining:.1f}s more]")
+        time.sleep(remaining)
+
     sd.stop()
 
     flat = recording.flatten()
@@ -261,7 +272,9 @@ def record_until_enter(device: int | None = None) -> bytes:
     print(f"[captured {duration_ms:.0f}ms, peak={peak}]")
 
     if peak < 100:
-        print("[WARNING: very low audio level — mic may be muted]")
+        print("[WARNING: very low audio — mic may be muted]")
+    if peak > 30000:
+        print("[WARNING: audio clipping — reduce mic volume to 60-70%]")
 
     return pcm
 
@@ -446,6 +459,8 @@ async def run_local(args: argparse.Namespace) -> None:
 
             if rest_pcm_parts:
                 play_pcm(b"".join(rest_pcm_parts), playback_sr)
+
+            time.sleep(0.3)
 
         print("\n=== Call summary ===")
         print(f"  turns:        {ctx.turn_idx}")

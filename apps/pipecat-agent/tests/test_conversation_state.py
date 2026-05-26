@@ -93,8 +93,8 @@ class TestRecentTurnsBuffer:
         s = ConversationState()
         s.record_priya_turn("So you mainly buy solvents.")
         prompt = system_prompt_addendum(s)
-        assert "recent" in prompt
         assert "So you mainly buy solvents." in prompt
+        assert "DIFFERENT" in prompt
 
 
 class TestFillerAudit:
