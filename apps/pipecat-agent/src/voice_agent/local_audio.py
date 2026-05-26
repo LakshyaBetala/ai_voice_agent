@@ -42,6 +42,7 @@ from .qualification import QualificationSlots
 from .r2_client import R2Client, R2Config, R2ConfigError
 from .sarvam_stt import STTResult, transcribe_batch
 from .sarvam_tts import synthesize as tts_synthesize
+from .cartesia_tts import synthesize as cartesia_synthesize
 from .gemini_llm import generate as gemini_generate, stream_generate as gemini_stream
 from .groq_llm import generate as groq_generate, stream_generate as groq_stream
 from .streaming_orchestrator import (
@@ -80,6 +81,20 @@ class _SarvamTTSAdapter:
     async def synth(self, text: str, lang: str) -> bytes:
         result = await tts_synthesize(
             text=text, lang=lang, api_key=self.api_key, client=self.client
+        )
+        return result.audio
+
+
+@dataclass
+class _CartesiaTTSAdapter:
+    api_key: str
+    client: httpx.AsyncClient
+    voice: str = "arushi"
+
+    async def synth(self, text: str, lang: str) -> bytes:
+        result = await cartesia_synthesize(
+            text=text, lang=lang, api_key=self.api_key,
+            voice=self.voice, client=self.client,
         )
         return result.audio
 
@@ -315,8 +330,10 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
     gemini_model = env.get("GEMINI_MODEL", "gemini-2.5-flash")
     groq_key = env.get("GROQ_API_KEY", "")
     groq_model = env.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-    if not sarvam_key:
-        raise SystemExit("SARVAM_API_KEY missing in .env")
+    cartesia_key = env.get("CARTESIA_API_KEY", "")
+    cartesia_voice = env.get("CARTESIA_VOICE", "arushi")
+    if not sarvam_key and not cartesia_key:
+        raise SystemExit("SARVAM_API_KEY or CARTESIA_API_KEY must be set in .env")
     if not gemini_key and not groq_key:
         raise SystemExit("GEMINI_API_KEY or GROQ_API_KEY must be set in .env")
 
@@ -341,9 +358,16 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         print(f"[LLM: Gemini {gemini_model}]")
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
 
+    if cartesia_key:
+        print(f"[TTS: Cartesia Sonic-3.5 voice={cartesia_voice}]")
+        tts_adapter = _CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice=cartesia_voice)
+    else:
+        print("[TTS: Sarvam Bulbul v3]")
+        tts_adapter = _SarvamTTSAdapter(api_key=sarvam_key, client=http)
+
     return TurnDependencies(
         stt=_SarvamSTTAdapter(api_key=sarvam_key, client=http),
-        tts=_SarvamTTSAdapter(api_key=sarvam_key, client=http),
+        tts=tts_adapter,
         llm=llm_adapter,
         r2_reader=r2_reader,
         r2_writer=r2_writer,
