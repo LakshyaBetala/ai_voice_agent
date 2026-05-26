@@ -143,7 +143,7 @@ class _GroqAdapter:
     model: str
     client: httpx.AsyncClient
     gemini_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-2.0-flash"
 
     async def respond(self, system_message: str, user_message: str) -> str:
         resp = await groq_generate(

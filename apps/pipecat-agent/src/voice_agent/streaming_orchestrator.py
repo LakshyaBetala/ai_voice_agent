@@ -386,11 +386,11 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
         parts.append(f'[Turn {turn + 1}. NO greeting. NO intro.]')
 
     if lang == "ta-IN":
-        parts.append('RESPOND IN TANGLISH (Tamil+English). Example: "Sari sir, toluene supply pannurom. Monthly evvalavu volume venum?" Use Tamil grammar, English business words.')
+        parts.append('TANGLISH ONLY. NO Hindi. Examples: "Sari sir, supply ready ah irukku." / "Enga delivery fast ah irukku." / "Bulk la 8-15% savings kidaikkum." Use Tamil grammar + English business words. Use "Sari" not "Achha".')
     elif lang == "en-IN":
-        parts.append('RESPOND IN ENGLISH. Professional but friendly.')
+        parts.append('ENGLISH only. Professional but friendly.')
     else:
-        parts.append('RESPOND IN HINGLISH (Hindi+English mix).')
+        parts.append('HINGLISH (Hindi+English mix). Use "Achha/Ji/Bilkul".')
 
     if is_silence:
         if turn < 2:
