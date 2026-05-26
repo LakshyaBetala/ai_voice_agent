@@ -386,7 +386,10 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
         parts.append(f'[Turn {turn + 1}. NO greeting. NO intro.]')
 
     if lang == "ta-IN":
-        parts.append('TANGLISH ONLY. NO Hindi. Examples: "Sari sir, supply ready ah irukku." / "Enga delivery fast ah irukku." / "Bulk la 8-15% savings kidaikkum." Use Tamil grammar + English business words. Use "Sari" not "Achha".')
+        parts.append('TANGLISH ONLY. NO Hindi words (no achha, no koi baat nahi, no bilkul). '
+                     'DO NOT start with "Sari sir nandri" — nandri means thank you, only use when ending call. '
+                     'Start with: "Sari sir" / "Aama" / "Sir" / direct response. '
+                     'Examples: "Sari sir, toluene supply ready ah irukku." / "Enga delivery fast ah irukku." / "Bulk la 8-15% savings kidaikkum."')
     elif lang == "en-IN":
         parts.append('ENGLISH only. Professional but friendly.')
     else:
