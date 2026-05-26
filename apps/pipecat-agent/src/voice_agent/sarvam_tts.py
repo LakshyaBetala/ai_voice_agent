@@ -65,7 +65,7 @@ DEFAULT_MALE_SPEAKER = "rahul"
 # picked a voice yet. CRM settings page overrides this per tenant.
 DEFAULT_SPEAKER = DEFAULT_FEMALE_SPEAKER
 DEFAULT_SAMPLE_RATE = 8000  # Match Plivo PSTN audio stream.
-DEFAULT_TIMEOUT_SECONDS = 6.0
+DEFAULT_TIMEOUT_SECONDS = 20.0
 
 
 def is_valid_v3_speaker(speaker: str) -> bool:

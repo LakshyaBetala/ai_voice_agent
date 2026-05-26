@@ -31,7 +31,7 @@ import httpx
 
 DEFAULT_MODEL = "gemini-2.5-flash"
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-DEFAULT_TIMEOUT_SECONDS = 8.0
+DEFAULT_TIMEOUT_SECONDS = 30.0
 
 # Telephony tuning: short, conversational replies. We do NOT want
 # essays here — Priya speaks in 1-2 sentence beats. 500 tokens fits

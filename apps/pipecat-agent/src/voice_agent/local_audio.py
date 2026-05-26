@@ -169,40 +169,55 @@ def record_until_enter(device: int | None = None) -> bytes:
     """Block stdin, record from mic until ENTER pressed.
 
     Returns raw int16 PCM at SAMPLE_RATE_HZ, mono. Uses sounddevice.
+    On Windows, PortAudio sometimes drops the callback after the first
+    recording. We use sd.rec() (blocking read) as a more reliable fallback.
     """
     sd, np = _get_sounddevice()
 
-    # Show which device we're using so the user knows the mic is right.
     if device is None:
         dev_info = sd.query_devices(kind="input")
     else:
         dev_info = sd.query_devices(device)
     print(f"[mic: {dev_info['name']}]")
 
+    print("[recording — speak now, press ENTER to stop]")
+
+    import threading
+    stop_event = threading.Event()
     chunks: list[Any] = []
     peak_level = [0.0]
 
-    def _cb(indata, frames, time_info, status):  # noqa: ANN001
-        chunks.append(indata.copy())
-        level = np.abs(indata).max()
-        if level > peak_level[0]:
-            peak_level[0] = level
+    def _record_thread():
+        try:
+            stream = sd.InputStream(
+                samplerate=SAMPLE_RATE_HZ,
+                channels=CHANNELS,
+                dtype="int16",
+                device=device,
+                blocksize=1024,
+            )
+            stream.start()
+            while not stop_event.is_set():
+                data, overflowed = stream.read(1024)
+                if len(data) > 0:
+                    chunks.append(data.copy())
+                    level = np.abs(data).max()
+                    if level > peak_level[0]:
+                        peak_level[0] = level
+            stream.stop()
+            stream.close()
+        except Exception as exc:
+            print(f"[mic error: {exc}]")
 
-    print("[recording — speak now, press ENTER to stop]")
+    rec_thread = threading.Thread(target=_record_thread, daemon=True)
+    rec_thread.start()
+
     try:
-        with sd.InputStream(
-            samplerate=SAMPLE_RATE_HZ,
-            channels=CHANNELS,
-            dtype="int16",
-            device=device,
-            callback=_cb,
-            blocksize=1024,
-        ):
-            input()  # block until user hits enter
-    except sd.PortAudioError as exc:
-        print(f"[mic error: {exc}]")
-        print("[try: python -m voice_agent.local_audio --list-devices]")
-        return b""
+        input()
+    except EOFError:
+        pass
+    stop_event.set()
+    rec_thread.join(timeout=2.0)
 
     if not chunks:
         print("[no audio chunks captured — mic may be muted or wrong device]")
@@ -291,7 +306,7 @@ async def run_local(args: argparse.Namespace) -> None:
         return
 
     env = _load_env()
-    async with httpx.AsyncClient(timeout=15.0) as http:
+    async with httpx.AsyncClient(timeout=30.0) as http:
         deps = _build_deps(env, http)
 
         ctx = make_initial_context(

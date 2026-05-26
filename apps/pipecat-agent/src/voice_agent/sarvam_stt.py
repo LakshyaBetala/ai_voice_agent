@@ -50,7 +50,7 @@ import httpx
 SARVAM_STT_URL = "https://api.sarvam.ai/speech-to-text"
 SARVAM_STT_TRANSLATE_URL = "https://api.sarvam.ai/speech-to-text-translate"
 DEFAULT_MODEL = "saaras:v3"
-DEFAULT_TIMEOUT_SECONDS = 8.0  # Telephony: must beat 1s p95 budget for short clips.
+DEFAULT_TIMEOUT_SECONDS = 20.0
 
 
 @dataclass(frozen=True)
