@@ -316,8 +316,7 @@ _PROMPT_CACHE: str = ""
 
 def _cached_prompt() -> str:
     global _PROMPT_CACHE
-    if not _PROMPT_CACHE:
-        _PROMPT_CACHE = load_priya_prompt()
+    _PROMPT_CACHE = load_priya_prompt()
     return _PROMPT_CACHE
 
 
