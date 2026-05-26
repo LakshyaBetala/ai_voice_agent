@@ -43,6 +43,7 @@ from .r2_client import R2Client, R2Config, R2ConfigError
 from .sarvam_stt import STTResult, transcribe_batch
 from .sarvam_tts import synthesize as tts_synthesize
 from .gemini_llm import generate as gemini_generate, stream_generate as gemini_stream
+from .groq_llm import generate as groq_generate, stream_generate as groq_stream
 from .streaming_orchestrator import (
     AudioChunkEvent,
     StreamingDependencies,
@@ -121,6 +122,56 @@ class _GeminiAdapter:
         return resp.text
 
 
+@dataclass
+class _GroqAdapter:
+    api_key: str
+    model: str
+    client: httpx.AsyncClient
+    gemini_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+
+    async def respond(self, system_message: str, user_message: str) -> str:
+        resp = await groq_generate(
+            system_message=system_message,
+            user_message=user_message,
+            api_key=self.api_key,
+            model=self.model,
+            client=self.client,
+        )
+        return resp.text
+
+    async def stream_respond(self, system_message: str, user_message: str):
+        async for chunk in groq_stream(
+            system_message=system_message,
+            user_message=user_message,
+            api_key=self.api_key,
+            model=self.model,
+            client=self.client,
+        ):
+            yield chunk
+
+    async def extract(self, prompt: str) -> str:
+        if self.gemini_key:
+            resp = await gemini_generate(
+                system_message="You are a JSON extraction engine. Output ONLY valid JSON.",
+                user_message=prompt,
+                api_key=self.gemini_key,
+                model=self.gemini_model,
+                client=self.client,
+                generation_config={"temperature": 0.1, "maxOutputTokens": 600},
+            )
+            return resp.text
+        resp = await groq_generate(
+            system_message="You are a JSON extraction engine. Output ONLY valid JSON.",
+            user_message=prompt,
+            api_key=self.api_key,
+            model=self.model,
+            client=self.client,
+            generation_config={"temperature": 0.1, "max_tokens": 600},
+        )
+        return resp.text
+
+
 # -- WAV helpers (PCM int16 ↔ WAV bytes ready for Sarvam) ------------------
 
 def pcm_to_wav_bytes(pcm: bytes, sample_rate: int = SAMPLE_RATE_HZ) -> bytes:
@@ -166,11 +217,9 @@ def list_audio_devices() -> None:
 
 
 def record_until_enter(device: int | None = None) -> bytes:
-    """Block stdin, record from mic until ENTER pressed.
-
-    Returns raw int16 PCM at SAMPLE_RATE_HZ, mono. Uses sounddevice.
-    On Windows, PortAudio sometimes drops the callback after the first
-    recording. We use sd.rec() (blocking read) as a more reliable fallback.
+    """Record from mic until ENTER pressed. Uses sd.rec() which is the most
+    reliable approach on Windows — avoids the PortAudio callback bug where
+    the device locks after sd.play() finishes.
     """
     sd, np = _get_sounddevice()
 
@@ -179,55 +228,39 @@ def record_until_enter(device: int | None = None) -> bytes:
     else:
         dev_info = sd.query_devices(device)
     print(f"[mic: {dev_info['name']}]")
-
     print("[recording — speak now, press ENTER to stop]")
 
-    import threading
-    stop_event = threading.Event()
-    chunks: list[Any] = []
-    peak_level = [0.0]
+    sd.stop()
+    time.sleep(0.05)
 
-    def _record_thread():
-        try:
-            stream = sd.InputStream(
-                samplerate=SAMPLE_RATE_HZ,
-                channels=CHANNELS,
-                dtype="int16",
-                device=device,
-                blocksize=1024,
-            )
-            stream.start()
-            while not stop_event.is_set():
-                data, overflowed = stream.read(1024)
-                if len(data) > 0:
-                    chunks.append(data.copy())
-                    level = np.abs(data).max()
-                    if level > peak_level[0]:
-                        peak_level[0] = level
-            stream.stop()
-            stream.close()
-        except Exception as exc:
-            print(f"[mic error: {exc}]")
-
-    rec_thread = threading.Thread(target=_record_thread, daemon=True)
-    rec_thread.start()
+    max_seconds = 30
+    recording = sd.rec(
+        int(max_seconds * SAMPLE_RATE_HZ),
+        samplerate=SAMPLE_RATE_HZ,
+        channels=CHANNELS,
+        dtype="int16",
+        device=device,
+    )
 
     try:
         input()
     except EOFError:
         pass
-    stop_event.set()
-    rec_thread.join(timeout=2.0)
+    sd.stop()
 
-    if not chunks:
-        print("[no audio chunks captured — mic may be muted or wrong device]")
+    flat = recording.flatten()
+    nonzero_idx = np.nonzero(flat)[0]
+    if len(nonzero_idx) == 0:
+        print("[no audio captured — mic may be muted]")
         return b""
 
-    pcm = np.concatenate(chunks).tobytes()
+    end = min(nonzero_idx[-1] + SAMPLE_RATE_HZ // 4, len(flat))
+    pcm = flat[:end].tobytes()
     duration_ms = len(pcm) / (SAMPLE_RATE_HZ * SAMPLE_WIDTH_BYTES) * 1000
-    print(f"[captured {duration_ms:.0f}ms, peak={peak_level[0]}]")
+    peak = int(np.abs(flat[:end]).max())
+    print(f"[captured {duration_ms:.0f}ms, peak={peak}]")
 
-    if peak_level[0] < 50:
+    if peak < 100:
         print("[WARNING: very low audio level — mic may be muted]")
 
     return pcm
@@ -240,9 +273,11 @@ def play_pcm(pcm: bytes, sample_rate: int) -> None:
     except ImportError:
         raise SystemExit("sounddevice/numpy missing — see record_until_enter() msg")
 
+    sd.stop()
     arr = np.frombuffer(pcm, dtype=np.int16)
     sd.play(arr, samplerate=sample_rate)
     sd.wait()
+    sd.stop()
 
 
 # -- Boot the harness ------------------------------------------------------
@@ -265,10 +300,12 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
     sarvam_key = env.get("SARVAM_API_KEY", "")
     gemini_key = env.get("GEMINI_API_KEY", "")
     gemini_model = env.get("GEMINI_MODEL", "gemini-2.5-flash")
+    groq_key = env.get("GROQ_API_KEY", "")
+    groq_model = env.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     if not sarvam_key:
         raise SystemExit("SARVAM_API_KEY missing in .env")
-    if not gemini_key:
-        raise SystemExit("GEMINI_API_KEY missing in .env")
+    if not gemini_key and not groq_key:
+        raise SystemExit("GEMINI_API_KEY or GROQ_API_KEY must be set in .env")
 
     # R2 is optional — without it the phrase cache simply always misses.
     try:
@@ -281,10 +318,20 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         r2_reader = _NoOpR2()
         r2_writer = _NoOpR2()
 
+    if groq_key:
+        print(f"[LLM: Groq {groq_model}]")
+        llm_adapter = _GroqAdapter(
+            api_key=groq_key, model=groq_model, client=http,
+            gemini_key=gemini_key, gemini_model=gemini_model,
+        )
+    else:
+        print(f"[LLM: Gemini {gemini_model}]")
+        llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
+
     return TurnDependencies(
         stt=_SarvamSTTAdapter(api_key=sarvam_key, client=http),
         tts=_SarvamTTSAdapter(api_key=sarvam_key, client=http),
-        llm=_GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http),
+        llm=llm_adapter,
         r2_reader=r2_reader,
         r2_writer=r2_writer,
     )
@@ -365,8 +412,10 @@ async def run_local(args: argparse.Namespace) -> None:
             wav = pcm_to_wav_bytes(pcm)
             t0 = time.monotonic()
 
-            # Streaming: play each sentence as it arrives
             sentence_count = 0
+            audio_chunks: list[tuple[bytes, int]] = []
+            first_audio_ms = 0
+
             async for event in run_turn_streaming(
                 ctx=ctx, audio_in=wav, deps=sdeps, prior_slots=slots,
             ):
@@ -378,9 +427,9 @@ async def run_local(args: argparse.Namespace) -> None:
                     print(f"  PRIYA [{event.sentence_idx}]: {event.text}")
                     try:
                         priya_pcm, priya_sr = wav_bytes_to_pcm(event.audio)
-                        play_pcm(priya_pcm, priya_sr)
+                        audio_chunks.append((priya_pcm, priya_sr))
                     except Exception:
-                        print("  [audio playback failed — likely not WAV]")
+                        print("  [audio decode failed]")
                 elif isinstance(event, TurnCompleteEvent):
                     slots = event.slots
                     wall_ms = int((time.monotonic() - t0) * 1000)
@@ -397,6 +446,12 @@ async def run_local(args: argparse.Namespace) -> None:
                         f"tts_1st={lm.get('tts_first_sentence_ms', 0)}ms  "
                         f"total={lm.get('total_ms', 0)}ms  wall={wall_ms}ms]"
                     )
+
+            if audio_chunks:
+                import numpy as _np
+                all_pcm = b"".join(pcm for pcm, _ in audio_chunks)
+                sr = audio_chunks[0][1]
+                play_pcm(all_pcm, sr)
 
         print("\n=== Call summary ===")
         print(f"  turns:        {ctx.turn_idx}")
