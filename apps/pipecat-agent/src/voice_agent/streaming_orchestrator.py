@@ -135,7 +135,16 @@ async def run_turn_streaming(
     stt_result = await deps.stt.transcribe(audio_in)
     timings["stt_ms"] = int((time.monotonic() - stt_t0) * 1000)
 
-    if not stt_result.transcript or not stt_result.transcript.strip():
+    raw_transcript = (stt_result.transcript or "").strip()
+
+    is_echo = False
+    if raw_transcript and ctx.conversation_state.recent_priya_turns:
+        for prev in ctx.conversation_state.recent_priya_turns[-2:]:
+            if len(raw_transcript) > 10 and raw_transcript[:20] in prev:
+                is_echo = True
+                break
+
+    if not raw_transcript or is_echo:
         stt_result = _STTResult(
             transcript="(silence)",
             language_code=stt_result.language_code or "hi-IN",
@@ -344,28 +353,28 @@ def _format_user_message(lead_text, slots, conv):
     turn = len(conv.recent_priya_turns)
     is_silence = "silence" in lead_text.lower() or not lead_text.strip()
 
-    parts = [f'[Turn {turn + 1}. NO greeting. Hinglish only.]']
+    parts = [f'[Turn {turn + 1}. NO greeting. Hinglish. 1-2 sentences MAX.]']
 
     if is_silence:
         if turn < 2:
-            parts.append('Lead silent. Say: "Sir, aapki awaaz nahi aa rahi. Sun pa rahe hain?"')
+            parts.append('Lead silent. Say: "Sir, awaaz nahi aa rahi. Sun pa rahe hain?"')
         else:
-            parts.append('Lead silent. Say: "Sir, connection weak hai. Kal better time pe call karun?"')
+            parts.append('Lead silent. Say: "Sir, connection issue hai. Kal call karun?"')
     else:
         parts.append(f'Lead: "{lead_text}"')
         if slots.product_interest:
             parts.append(f"Known: {slots.product_interest}")
-        if slots.volume_monthly_kg and slots.volume_monthly_kg > 0:
-            parts.append(f"Volume: {slots.volume_monthly_kg} kg/mo")
-        if slots.current_supplier:
-            parts.append(f"Supplier: {slots.current_supplier}")
 
     if slots.buying_confidence >= 0.7:
-        parts.append("HIGH signal. Close now: quote, WhatsApp, callback.")
+        parts.append("HIGH signal → close with quote/WhatsApp.")
     elif slots.buying_confidence >= 0.4:
-        parts.append("Medium interest. Build value, find pain.")
+        parts.append("Medium → build value.")
 
-    parts.append("Think: what moves this toward a sale RIGHT NOW?")
+    rejection_count = conv.consecutive_close_attempts
+    if rejection_count >= 2:
+        parts.append("Lead rejected twice. Say goodbye politely and END.")
+
+    parts.append("Respond naturally. If lead is not a prospect, exit gracefully.")
     return "\n".join(parts)
 
 
