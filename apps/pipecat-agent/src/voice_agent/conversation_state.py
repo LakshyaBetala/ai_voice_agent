@@ -230,22 +230,9 @@ def system_prompt_addendum(state: ConversationState) -> str:
     parts: list[str] = []
 
     parts.append(
-        "<response_format>\n"
-        "ये rules हर बार follow करो:\n"
-        "1. एक छोटा sentence बोलो, ज़्यादा से ज़्यादा 15 शब्द।\n"
-        "2. हिंदी में बोलो। Chemical names English में रखो।\n"
-        "3. Confident salesperson हो। आगे बढ़ाओ बात को।\n"
-        "4. कभी दोबारा नमस्ते/greeting मत बोलो। Intro सिर्फ एक बार होता है।\n"
-        "5. सीधा काम की बात बोलो — 'अच्छा', 'जी हाँ' से शुरू करो।\n"
-        "</response_format>"
-    )
-
-    parts.append(
-        "<rules>\n"
-        "Products: acids, solvents, alcohols, glycols, powders — 250+ chemicals। तुरंत confirm करो।\n"
-        "Chemical सुनो → 'जी हाँ है, monthly कितना?' | 'क्या बेचते हो' → industry के 2-3 products बताओ।\n"
-        "'WhatsApp करो' → number लो | हर जवाब में benefit: '4 घंटे quote', 'bulk pricing', 'ISO certified'।\n"
-        "</rules>"
+        "<format>ONE Hinglish sentence. Max 15 words. Mix Hindi+English naturally. "
+        "NO formal Hindi. NO शुद्ध Hindi. Say 'products' not 'उत्पाद'. Say 'company' not 'कंपनी'। "
+        "NO greeting/namaste. Start with: अच्छा/जी/बिल्कुल/sir.</format>"
     )
 
     parts.append(f"<current_phase>{state.phase.value}</current_phase>")

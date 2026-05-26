@@ -29,6 +29,7 @@ from .pain_library import pick_pain_hypothesis
 from .phrase_cache import PINNED_VOICE_ID, load_or_synthesize_phrase
 from .qualification import QualificationSlots, extract_slots
 from .prompts import build_system_message, load_priya_prompt
+from .sarvam_stt import STTResult as _STTResult
 
 
 # -- Protocols (same as turn_orchestrator but with streaming LLM) -----------
@@ -129,10 +130,18 @@ async def run_turn_streaming(
     timings: dict[str, int] = {}
     t0 = time.monotonic()
 
-    # ---- 1. STT (same as sequential) -----------------------------------
+    # ---- 1. STT -----------------------------------
     stt_t0 = time.monotonic()
     stt_result = await deps.stt.transcribe(audio_in)
     timings["stt_ms"] = int((time.monotonic() - stt_t0) * 1000)
+
+    if not stt_result.transcript or not stt_result.transcript.strip():
+        stt_result = _STTResult(
+            transcript="(silence)",
+            language_code=stt_result.language_code or "hi-IN",
+            confidence=0.0,
+            request_id=getattr(stt_result, 'request_id', ''),
+        )
 
     # ---- 2. Language + Phase -------------------------------------------
     lang = _coerce_lang(stt_result.language_code)
@@ -301,11 +310,11 @@ async def run_turn_streaming(
 
 # -- Helpers (same as turn_orchestrator) ------------------------------------
 
-_PROMPT_CACHE: str | None = None
+_PROMPT_CACHE: str = ""
 
 def _cached_prompt() -> str:
     global _PROMPT_CACHE
-    if _PROMPT_CACHE is None:
+    if not _PROMPT_CACHE:
         _PROMPT_CACHE = load_priya_prompt()
     return _PROMPT_CACHE
 
@@ -333,15 +342,24 @@ def _pain_hypothesis_for_turn(ctx, slots, lang: str) -> Optional[str]:
 
 def _format_user_message(lead_text, slots, conv):
     turn = len(conv.recent_priya_turns)
-    parts = [f'[Turn {turn + 1}. Intro already done. DO NOT greet or say namaste.]']
-    parts.append(f'Lead: "{lead_text}"')
+    is_silence = "silence" in lead_text.lower() or not lead_text.strip()
+
+    parts = [f'[Turn {turn + 1}. NO greeting. NO namaste. NO formal Hindi.]']
+
+    if is_silence:
+        parts.append('Lead was silent or unclear.')
+        parts.append('Say something like: "Hello sir, aapki awaaz nahi aa rahi. Kya aap sun rahe hain?"')
+    else:
+        parts.append(f'Lead said: "{lead_text}"')
+
     if slots.product_interest:
-        parts.append(f"Products mentioned: {slots.product_interest}")
+        parts.append(f"Products: {slots.product_interest}")
     if slots.buying_confidence >= 0.7:
-        parts.append("STRONG buying signal → push for quote/WhatsApp.")
+        parts.append("BUYING SIGNAL HIGH → close with quote/WhatsApp now.")
     elif 0 < slots.buying_confidence <= 0.3:
-        parts.append("Weak signal → one open question or polite close.")
-    parts.append("Reply in ONE Hindi sentence, max 12 words. Start with अच्छा/जी हाँ/बिल्कुल.")
+        parts.append("Low interest → ask one question or close politely.")
+
+    parts.append("ONE Hinglish sentence. Max 15 words. Use English words like: products, company, monthly, volume, delivery, pricing.")
     return "\n".join(parts)
 
 
