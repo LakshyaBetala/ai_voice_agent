@@ -344,25 +344,28 @@ def _format_user_message(lead_text, slots, conv):
     turn = len(conv.recent_priya_turns)
     is_silence = "silence" in lead_text.lower() or not lead_text.strip()
 
-    parts = [f'[Turn {turn + 1}. NO greeting. NO namaste. NO formal Hindi.]']
+    parts = [f'[Turn {turn + 1}. NO greeting. Hinglish only.]']
 
     if is_silence:
-        parts.append('Lead was silent or audio unclear.')
         if turn < 2:
-            parts.append('Say: "Sir, aapki awaaz thodi unclear aa rahi hai. Kya aap mujhe sun pa rahe hain?"')
+            parts.append('Lead silent. Say: "Sir, aapki awaaz nahi aa rahi. Sun pa rahe hain?"')
         else:
-            parts.append('Say: "Sir, connection thoda weak lag raha hai. Main kal better time pe call karun?"')
+            parts.append('Lead silent. Say: "Sir, connection weak hai. Kal better time pe call karun?"')
     else:
-        parts.append(f'Lead said: "{lead_text}"')
+        parts.append(f'Lead: "{lead_text}"')
+        if slots.product_interest:
+            parts.append(f"Known: {slots.product_interest}")
+        if slots.volume_monthly_kg and slots.volume_monthly_kg > 0:
+            parts.append(f"Volume: {slots.volume_monthly_kg} kg/mo")
+        if slots.current_supplier:
+            parts.append(f"Supplier: {slots.current_supplier}")
 
-    if slots.product_interest:
-        parts.append(f"Products: {slots.product_interest}")
     if slots.buying_confidence >= 0.7:
-        parts.append("BUYING SIGNAL HIGH → close with quote/WhatsApp now.")
-    elif 0 < slots.buying_confidence <= 0.3:
-        parts.append("Low interest → ask one question or close politely.")
+        parts.append("HIGH signal. Close now: quote, WhatsApp, callback.")
+    elif slots.buying_confidence >= 0.4:
+        parts.append("Medium interest. Build value, find pain.")
 
-    parts.append("ONE Hinglish sentence. Max 15 words. Use English words like: products, company, monthly, volume, delivery, pricing.")
+    parts.append("Think: what moves this toward a sale RIGHT NOW?")
     return "\n".join(parts)
 
 

@@ -230,9 +230,8 @@ def system_prompt_addendum(state: ConversationState) -> str:
     parts: list[str] = []
 
     parts.append(
-        "<format>ONE Hinglish sentence. Max 15 words. Mix Hindi+English naturally. "
-        "NO formal Hindi. NO शुद्ध Hindi. Say 'products' not 'उत्पाद'. Say 'company' not 'कंपनी'। "
-        "NO greeting/namaste. Start with: अच्छा/जी/बिल्कुल/sir.</format>"
+        "<format>Hinglish. Short and natural — 1-2 sentences, like a real phone call. "
+        "NO formal Hindi. NO greeting/namaste. Start with: achha/ji/bilkul/sir/dekhiye.</format>"
     )
 
     parts.append(f"<current_phase>{state.phase.value}</current_phase>")
