@@ -390,28 +390,33 @@ def _format_user_message(lead_text, slots, conv):
     turn = len(conv.recent_priya_turns)
     is_silence = "silence" in lead_text.lower() or not lead_text.strip()
 
-    parts = [f'[Turn {turn + 1}. NO greeting. Hinglish. 1-2 sentences MAX.]']
+    parts = []
+
+    if turn == 0:
+        parts.append('[Turn 1. You ALREADY said namaste and introduced yourself. DO NOT introduce yourself again. Just respond to what the lead said.]')
+    else:
+        parts.append(f'[Turn {turn + 1}. NO greeting. NO intro.]')
 
     if is_silence:
         if turn < 2:
             parts.append('Lead silent. Say: "Sir, awaaz nahi aa rahi. Sun pa rahe hain?"')
         else:
-            parts.append('Lead silent. Say: "Sir, connection issue hai. Kal call karun?"')
+            parts.append('Lead silent. Say: "Sir, connection weak hai. Kal call karun?"')
     else:
         parts.append(f'Lead: "{lead_text}"')
         if slots.product_interest:
             parts.append(f"Known: {slots.product_interest}")
 
     if slots.buying_confidence >= 0.7:
-        parts.append("HIGH signal → close with quote/WhatsApp.")
+        parts.append("HIGH signal. Close: quote/WhatsApp.")
     elif slots.buying_confidence >= 0.4:
-        parts.append("Medium → build value.")
+        parts.append("Medium. Build value.")
 
-    rejection_count = conv.consecutive_close_attempts
-    if rejection_count >= 2:
-        parts.append("Lead rejected twice. Say goodbye politely and END.")
+    if conv.consecutive_close_attempts >= 2:
+        parts.append("Lead rejected twice. Say goodbye and END.")
 
-    parts.append("Respond naturally. If lead is not a prospect, exit gracefully.")
+    parts.append('BANNED WORDS: आवश्यकता, उत्पाद, सहायता, कृपया. Use English instead: requirement, products, help, please.')
+    parts.append("Respond naturally. Not a prospect = exit gracefully.")
     return "\n".join(parts)
 
 

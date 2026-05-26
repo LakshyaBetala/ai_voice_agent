@@ -42,7 +42,7 @@ MIN_LANG_CONFIDENCE: float = 0.75
 
 # Number of consecutive same-language full utterances required to flip.
 # Set to 2: a single drift word ("haan", "okay") never flips state.
-SWITCH_HYSTERESIS: int = 2
+SWITCH_HYSTERESIS: int = 1
 
 # Word count above which an utterance counts as "full" for hysteresis.
 # 3+ words means the lead said more than a backchannel acknowledgement.
