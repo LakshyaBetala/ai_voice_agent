@@ -414,7 +414,7 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
 
     if lang != "ta-IN":
         parts.append('BANNED: आवश्यकता, उत्पाद, सहायता, कृपया.')
-    parts.append("Not a prospect = exit gracefully.")
+    parts.append("NEVER invent volumes or prices lead didn't say. NEVER repeat same selling point twice. Exit gracefully if not a prospect.")
     return "\n".join(parts)
 
 
