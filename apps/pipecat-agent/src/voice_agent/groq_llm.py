@@ -19,7 +19,7 @@ DEFAULT_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 DEFAULT_GENERATION_CONFIG: dict[str, Any] = {
-    "max_tokens": 500,
+    "max_tokens": 150,
     "temperature": 0.7,
     "top_p": 0.9,
 }

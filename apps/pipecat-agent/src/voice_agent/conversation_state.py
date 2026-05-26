@@ -252,55 +252,24 @@ def system_prompt_addendum(state: ConversationState) -> str:
 
     if state.used_acknowledgments:
         used = ", ".join(sorted(state.used_acknowledgments))
-        parts.append(
-            f"<acks_already_used>{used}</acks_already_used>"
-            "\nDo not start your next response with any of these. Pick a different "
-            "acknowledgment or skip it entirely."
-        )
+        parts.append(f"<used_acks>{used}</used_acks>")
 
     if state.recent_priya_turns:
-        joined = "\n---\n".join(state.recent_priya_turns)
-        parts.append(
-            f"<your_recent_turns>\n{joined}\n</your_recent_turns>"
-            "\nDo not paraphrase any of these. Move the conversation forward."
-        )
+        last2 = state.recent_priya_turns[-2:]
+        parts.append(f"<recent>{' | '.join(last2)}</recent>")
 
     if state.filler_audit_failing():
-        parts.append(
-            "<style_nudge>Your last few responses have been too formal. "
-            "Include one natural filler ('ji', 'haan', 'achha', 'right', 'okay') "
-            "in your next response.</style_nudge>"
-        )
+        parts.append("<nudge>Add filler: ji/haan/achha</nudge>")
 
-    if state.phase == Phase.CONNECT:
-        parts.append(
-            "<phase_directive>You are in rapport-building mode. Ask one open "
-            "question about their business. Do NOT ask about budget, volume, "
-            "or timeline yet. Listen and reflect back.</phase_directive>"
-        )
-    elif state.phase == Phase.DISCOVER:
-        parts.append(
-            "<phase_directive>Float a pain hypothesis matching their business. "
-            "Use the pain_library entry passed in <pain_hypothesis>. Make it a "
-            "soft guess, not an interrogation.</phase_directive>"
-        )
-    elif state.phase == Phase.QUALIFY:
-        parts.append(
-            "<phase_directive>Ask qualifying questions but interleave with "
-            "value statements (credit terms, delivery promise, quality cert). "
-            "Maximum 2 questions in a row.</phase_directive>"
-        )
-    elif state.phase == Phase.CLOSE:
-        parts.append(
-            "<phase_directive>Ask one commit question based on current "
-            "buying_confidence (Hot=quote, Warm=sample, Cold=polite future "
-            "contact). Then wrap up.</phase_directive>"
-        )
-    elif state.phase == Phase.EXTENSION:
-        parts.append(
-            "<phase_directive>The lead is engaged and buying confidence is "
-            "high. You have ~3 more minutes. Stay in qualification + "
-            "commit-question mode. This call now bills as 2 units.</phase_directive>"
-        )
+    phase_hints = {
+        Phase.CONNECT: "Rapport। Business के बारे में पूछो।",
+        Phase.DISCOVER: "Pain point guess करो।",
+        Phase.QUALIFY: "Volume, timeline, supplier पूछो। Value बताओ।",
+        Phase.CLOSE: "Quote/callback offer करो। Wrap up।",
+        Phase.EXTENSION: "Buying signal strong। Qualify + close।",
+    }
+    hint = phase_hints.get(state.phase)
+    if hint:
+        parts.append(f"<phase>{hint}</phase>")
 
     return "\n\n".join(parts)

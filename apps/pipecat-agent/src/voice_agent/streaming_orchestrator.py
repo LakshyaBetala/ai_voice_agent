@@ -169,7 +169,7 @@ async def run_turn_streaming(
         )
 
     # ---- 4. Build system message (same as sequential) ------------------
-    base_prompt = load_priya_prompt()
+    base_prompt = _cached_prompt()
     system_msg = build_system_message(
         base_prompt=base_prompt,
         current_language=transition.current_language.value,
@@ -305,6 +305,15 @@ async def run_turn_streaming(
 
 
 # -- Helpers (same as turn_orchestrator) ------------------------------------
+
+_PROMPT_CACHE: str | None = None
+
+def _cached_prompt() -> str:
+    global _PROMPT_CACHE
+    if _PROMPT_CACHE is None:
+        _PROMPT_CACHE = load_priya_prompt()
+    return _PROMPT_CACHE
+
 
 def _coerce_lang(code: str) -> Lang | None:
     try:

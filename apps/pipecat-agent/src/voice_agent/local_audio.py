@@ -413,8 +413,8 @@ async def run_local(args: argparse.Namespace) -> None:
             t0 = time.monotonic()
 
             sentence_count = 0
-            audio_chunks: list[tuple[bytes, int]] = []
-            first_audio_ms = 0
+            rest_pcm_parts: list[bytes] = []
+            playback_sr = TTS_OUTPUT_SAMPLE_RATE
 
             async for event in run_turn_streaming(
                 ctx=ctx, audio_in=wav, deps=sdeps, prior_slots=slots,
@@ -423,35 +423,29 @@ async def run_local(args: argparse.Namespace) -> None:
                     sentence_count += 1
                     if sentence_count == 1:
                         first_audio_ms = int((time.monotonic() - t0) * 1000)
-                        print(f"\n  [first audio in {first_audio_ms}ms]")
-                    print(f"  PRIYA [{event.sentence_idx}]: {event.text}")
+                        print(f"\n  [{first_audio_ms}ms] ", end="", flush=True)
+                    print(f"{event.text} ", end="", flush=True)
                     try:
-                        priya_pcm, priya_sr = wav_bytes_to_pcm(event.audio)
-                        audio_chunks.append((priya_pcm, priya_sr))
+                        chunk_pcm, playback_sr = wav_bytes_to_pcm(event.audio)
+                        if sentence_count == 1:
+                            play_pcm(chunk_pcm, playback_sr)
+                        else:
+                            rest_pcm_parts.append(chunk_pcm)
                     except Exception:
-                        print("  [audio decode failed]")
+                        pass
                 elif isinstance(event, TurnCompleteEvent):
                     slots = event.slots
                     wall_ms = int((time.monotonic() - t0) * 1000)
                     lm = event.latency_ms
-                    print(f"\n  LEAD ({event.lead_lang}): {event.lead_text}")
                     print(
-                        f"  [turn={ctx.turn_idx}  phase={ctx.conversation_state.phase.value}  "
-                        f"sentences={event.total_sentences}  cache_hits={event.cache_hits}  "
-                        f"buying_conf={slots.buying_confidence:.2f}]"
-                    )
-                    print(
-                        f"  [latency  stt={lm.get('stt_ms', 0)}ms  "
-                        f"llm_1st_sent={lm.get('llm_first_sentence_ms', 0)}ms  "
-                        f"tts_1st={lm.get('tts_first_sentence_ms', 0)}ms  "
-                        f"total={lm.get('total_ms', 0)}ms  wall={wall_ms}ms]"
+                        f"\n  LEAD: {event.lead_text}"
+                        f"\n  [{ctx.turn_idx}|{ctx.conversation_state.phase.value}|"
+                        f"stt={lm.get('stt_ms', 0)}|llm={lm.get('llm_first_sentence_ms', 0)}|"
+                        f"tts={lm.get('tts_first_sentence_ms', 0)}|wall={wall_ms}ms]"
                     )
 
-            if audio_chunks:
-                import numpy as _np
-                all_pcm = b"".join(pcm for pcm, _ in audio_chunks)
-                sr = audio_chunks[0][1]
-                play_pcm(all_pcm, sr)
+            if rest_pcm_parts:
+                play_pcm(b"".join(rest_pcm_parts), playback_sr)
 
         print("\n=== Call summary ===")
         print(f"  turns:        {ctx.turn_idx}")

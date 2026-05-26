@@ -77,7 +77,7 @@ class TestAcknowledgmentTracking:
         prompt = system_prompt_addendum(s)
         assert "got it" in prompt
         assert "achha" in prompt
-        assert "Do not start your next response" in prompt
+        assert "used_acks" in prompt
 
 
 class TestRecentTurnsBuffer:
@@ -93,7 +93,7 @@ class TestRecentTurnsBuffer:
         s = ConversationState()
         s.record_priya_turn("So you mainly buy solvents.")
         prompt = system_prompt_addendum(s)
-        assert "Do not paraphrase any of these" in prompt
+        assert "recent" in prompt
         assert "So you mainly buy solvents." in prompt
 
 
@@ -124,7 +124,7 @@ class TestFillerAudit:
         for _ in range(FILLER_AUDIT_WINDOW):
             s.record_priya_turn("Please share more details about your operation.")
         prompt = system_prompt_addendum(s)
-        assert "natural filler" in prompt
+        assert "filler" in prompt.lower()
 
 
 class TestCloseLoop:
@@ -147,11 +147,11 @@ class TestCloseLoop:
 
 class TestPhaseDirectives:
     @pytest.mark.parametrize("phase,expected_substring", [
-        (Phase.CONNECT, "rapport-building"),
-        (Phase.DISCOVER, "pain hypothesis"),
-        (Phase.QUALIFY, "Maximum 2 questions"),
-        (Phase.CLOSE, "commit question"),
-        (Phase.EXTENSION, "bills as 2 units"),
+        (Phase.CONNECT, "Rapport"),
+        (Phase.DISCOVER, "Pain"),
+        (Phase.QUALIFY, "Volume"),
+        (Phase.CLOSE, "Quote"),
+        (Phase.EXTENSION, "Buying signal"),
     ])
     def test_addendum_includes_phase_directive(self, phase: Phase, expected_substring: str):
         s = ConversationState(phase=phase)
