@@ -357,8 +357,9 @@ def _build_context_summary(slots, ctx) -> str:
         parts.append(f"Pain: {slots.pain_point}")
     if slots.decision_role:
         parts.append(f"Role: {slots.decision_role}")
-    if slots.contact_info:
-        parts.append(f"Contact: {slots.contact_info}")
+    contact = slots.slot_confidence.get("contact_info")
+    if contact:
+        parts.append(f"Contact captured: yes")
     if parts:
         parts.append("DO NOT re-ask anything already captured above.")
     return " | ".join(parts) if parts else ""
