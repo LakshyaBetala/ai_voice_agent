@@ -294,33 +294,63 @@ def record_until_enter(device: int | None = None) -> bytes:
     return pcm
 
 
-def auto_record(duration_sec: float = 8.0, device: int | None = None) -> bytes:
-    """Record for a fixed duration — no enter needed. Like a real phone call."""
+SILENCE_THRESHOLD = 300
+SILENCE_STOP_SEC = 2.0
+MAX_RECORD_SEC = 15.0
+
+def auto_record(duration_sec: float = 15.0, device: int | None = None) -> bytes:
+    """Record until lead stops talking (2s silence) or max duration.
+
+    Like a real phone — listens until natural pause, not a fixed timer.
+    """
     sd, np = _get_sounddevice()
 
     sd.stop()
     time.sleep(0.15)
 
-    frames = int(duration_sec * SAMPLE_RATE_HZ)
-    recording = sd.rec(frames, samplerate=SAMPLE_RATE_HZ, channels=CHANNELS, dtype="int16", device=device)
-    sd.wait()
+    chunk_size = 1024
+    chunks: list = []
+    peak_level = 0
+    silence_chunks = 0
+    silence_limit = int(SILENCE_STOP_SEC * SAMPLE_RATE_HZ / chunk_size)
+    speech_detected = False
 
-    flat = recording.flatten()
-    peak = int(np.abs(flat).max())
+    stream = sd.InputStream(
+        samplerate=SAMPLE_RATE_HZ, channels=CHANNELS,
+        dtype="int16", device=device, blocksize=chunk_size,
+    )
+    stream.start()
+    start = time.monotonic()
 
-    if peak < 100:
+    try:
+        while (time.monotonic() - start) < duration_sec:
+            data, _ = stream.read(chunk_size)
+            chunks.append(data.copy())
+            level = int(np.abs(data).max())
+            if level > peak_level:
+                peak_level = level
+
+            if level > SILENCE_THRESHOLD:
+                speech_detected = True
+                silence_chunks = 0
+            else:
+                silence_chunks += 1
+
+            if speech_detected and silence_chunks >= silence_limit:
+                break
+    finally:
+        stream.stop()
+        stream.close()
+
+    if not speech_detected or peak_level < 100:
+        print("  [no speech detected]")
         return b""
 
-    nonzero_idx = np.nonzero(flat)[0]
-    if len(nonzero_idx) == 0:
-        return b""
-
-    end = min(nonzero_idx[-1] + SAMPLE_RATE_HZ // 4, len(flat))
-    pcm = flat[:end].tobytes()
+    pcm = np.concatenate(chunks).tobytes()
     duration_ms = len(pcm) / (SAMPLE_RATE_HZ * SAMPLE_WIDTH_BYTES) * 1000
-    print(f"  [captured {duration_ms:.0f}ms, peak={peak}]")
+    print(f"  [captured {duration_ms:.0f}ms, peak={peak_level}]")
 
-    if peak > 30000:
+    if peak_level > 30000:
         print("  [WARNING: clipping — reduce mic volume]")
 
     return pcm
@@ -472,8 +502,8 @@ async def run_local(args: argparse.Namespace) -> None:
                 break
 
             if auto_record_sec > 0:
-                print(f"\n  [listening {auto_record_sec}s...]")
-                pcm = auto_record(duration_sec=auto_record_sec, device=device)
+                print(f"\n  [listening...]")
+                pcm = auto_record(duration_sec=MAX_RECORD_SEC, device=device)
             else:
                 line = input("Press ENTER to record (or 'q' to quit): ").strip()
                 if line.lower() == "q":

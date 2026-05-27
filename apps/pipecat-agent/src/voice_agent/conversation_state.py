@@ -230,8 +230,7 @@ def system_prompt_addendum(state: ConversationState) -> str:
     parts: list[str] = []
 
     parts.append(
-        "<format>ROMAN SCRIPT ONLY — never Devanagari. "
-        "1-2 sentences. End with a question (?). "
+        "<format>ROMAN SCRIPT ONLY. 1-2 sentences. "
         "Never say your name or company. Never greet.</format>"
     )
 

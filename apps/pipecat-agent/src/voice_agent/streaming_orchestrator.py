@@ -377,9 +377,14 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
     turn = len(conv.recent_priya_turns)
     is_silence = "silence" in lead_text.lower() or not lead_text.strip()
 
-    close_words = ["bhej do", "send karo", "theek hai", "okay done", "bhej dena",
-                    "anuppunga", "send pannunga", "quote bhejo", "whatsapp karo",
-                    "bye", "thank you", "thanks"]
+    close_words = ["bhej do", "bhej de", "bhej dena", "bhej dijiye",
+                    "send karo", "send kar do", "send kar dena",
+                    "whatsapp karo", "whatsapp pe bhej", "whatsapp bhej",
+                    "quote bhejo", "quote bhej do",
+                    "anuppunga", "anuppu", "send pannunga",
+                    "theek hai", "okay done", "kar dijiye",
+                    "bye", "thank you", "thanks", "bye bye",
+                    "dekh leta", "dekh lunga", "dekhta hoon", "dekhti hoon"]
     is_close = any(w in lead_text.lower() for w in close_words) if not is_silence else False
 
     parts = ['[ROMAN SCRIPT ONLY. No Devanagari. No Tamil script.]']
@@ -409,8 +414,6 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
             parts.append("High interest → push for close.")
         elif conv.consecutive_close_attempts >= 2:
             parts.append("Two rejections → goodbye.")
-
-        parts.append("Pattern: [acknowledge] + [ONE point] + [end with question?]")
 
     return "\n".join(parts)
 
