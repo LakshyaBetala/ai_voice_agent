@@ -377,33 +377,41 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
     turn = len(conv.recent_priya_turns)
     is_silence = "silence" in lead_text.lower() or not lead_text.strip()
 
-    parts = []
+    close_words = ["bhej do", "send karo", "theek hai", "okay done", "bhej dena",
+                    "anuppunga", "send pannunga", "quote bhejo", "whatsapp karo",
+                    "bye", "thank you", "thanks"]
+    is_close = any(w in lead_text.lower() for w in close_words) if not is_silence else False
+
+    parts = ['[ROMAN SCRIPT ONLY. No Devanagari. No Tamil script.]']
 
     if turn == 0:
-        parts.append('[Intro DONE. DO NOT say your name or company. Directly respond.]')
-    else:
-        parts.append(f'[Turn {turn + 1}]')
+        parts.append('[Intro DONE. Do not introduce yourself.]')
 
     if lang == "ta-IN":
-        parts.append('[TANGLISH. ZERO Hindi words. sari/aama/sir only.]')
+        parts.append('[TANGLISH. Zero Hindi.]')
     elif lang == "en-IN":
         parts.append('[ENGLISH]')
     else:
         parts.append('[HINGLISH]')
 
     if is_silence:
-        parts.append('Lead silent → ask if they can hear you.')
+        parts.append('Lead silent. Ask: "Sir, sun pa rahe hain?"')
+    elif is_close:
+        parts.append(f'Lead: "{lead_text}"')
+        parts.append('Lead wants to CLOSE. Say: "Bilkul sir, isi number pe quote aa jayega. Thank you!" STOP. No more selling.')
     else:
         parts.append(f'Lead: "{lead_text}"')
         if slots.product_interest:
-            parts.append(f"Products: {slots.product_interest}")
+            parts.append(f"Known: {slots.product_interest}")
 
-    if slots.buying_confidence >= 0.7:
-        parts.append("CLOSE NOW → isi number pe WhatsApp pe quote.")
-    elif conv.consecutive_close_attempts >= 2:
-        parts.append("Two rejections → say goodbye.")
+    if not is_close:
+        if slots.buying_confidence >= 0.7:
+            parts.append("High interest → push for close.")
+        elif conv.consecutive_close_attempts >= 2:
+            parts.append("Two rejections → goodbye.")
 
-    parts.append("You are SELLING. Connect with their need. Give ONE value point. Push forward.")
+        parts.append("Pattern: [acknowledge] + [ONE point] + [end with question?]")
+
     return "\n".join(parts)
 
 

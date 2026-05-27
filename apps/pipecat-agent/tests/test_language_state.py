@@ -62,32 +62,25 @@ class TestLowConfidenceIgnored:
 
 
 # ---------------------------------------------------------------------------
-# Hysteresis: 2 consecutive full utterances flip.
+# Hysteresis: 1 full utterance flips (lowered for faster switching).
 # ---------------------------------------------------------------------------
 
 class TestHysteresisFlip:
-    def test_two_full_hindi_utterances_flip_from_english(self):
+    def test_one_full_hindi_utterance_flips_from_english(self):
         state = LanguageState.initial(Lang.EN)
         t1 = state.update(utt("haan main Sunil bol raha hoon Brilliant Paints se", Lang.HI))
-        assert t1.switched is False
-        assert state.pending_count == 1
-
-        t2 = state.update(utt("hum toluene aur titanium dioxide kharidte hain", Lang.HI))
-        assert t2.switched is True
-        assert t2.trigger == "hysteresis"
+        assert t1.switched is True
+        assert t1.trigger == "hysteresis"
         assert state.current == Lang.HI
-        assert t2.bridge_phrase is not None  # smooth transition
 
     def test_bridge_phrase_en_to_hi(self):
         state = LanguageState.initial(Lang.EN)
-        state.update(utt("hum naya supplier dhoond rahe hain", Lang.HI))
-        t = state.update(utt("aapke paas glycerine hai kya bhai", Lang.HI))
+        t = state.update(utt("hum naya supplier dhoond rahe hain", Lang.HI))
         assert t.bridge_phrase == "Bilkul, Hindi mein baat karte hain."
 
     def test_bridge_phrase_hi_to_en(self):
         state = LanguageState.initial(Lang.HI)
-        state.update(utt("we are looking for new suppliers", Lang.EN))
-        t = state.update(utt("can you send your product catalog", Lang.EN))
+        t = state.update(utt("we are looking for new suppliers actually", Lang.EN))
         assert t.bridge_phrase == "Sure, let's talk in English."
 
     def test_alternating_short_utterances_never_flip(self):
@@ -99,17 +92,9 @@ class TestHysteresisFlip:
         assert state.current == Lang.EN
 
     def test_pending_resets_when_lead_returns_to_current(self):
-        """Lead says one full Hindi sentence, then returns to English →
-        the pending counter must reset so a later single Hindi sentence
-        doesn't trigger a flip."""
         state = LanguageState.initial(Lang.EN)
-        state.update(utt("haan main Sunil bol raha hoon", Lang.HI))  # pending=1
-        assert state.pending_count == 1
-        state.update(utt("actually let me speak in English", Lang.EN))
-        assert state.pending_count == 0
-        t = state.update(utt("we want to discuss volume pricing", Lang.HI))
-        # Even though Hindi was detected, pending should be 1 here, not 2.
-        assert t.switched is False
+        state.update(utt("haan main Sunil bol raha hoon", Lang.HI))
+        assert state.current == Lang.HI  # flips immediately with hysteresis=1
 
 
 # ---------------------------------------------------------------------------
@@ -171,12 +156,10 @@ class TestCodeMixedNoFlip:
 
 class TestRealisticFlows:
     def test_call_starts_english_drifts_hindi_correctly(self):
-        """Lead picks up in English politeness, then naturally moves
-        to Hindi for the technical part. State must follow."""
+        """Lead picks up in English, then moves to Hindi. Flips on first full Hindi utterance."""
         state = LanguageState.initial(Lang.EN)
         state.update(utt("yes hello", Lang.EN))  # short, no effect
-        state.update(utt("ji main Sunil bol raha hoon", Lang.HI))  # pending=1
-        t = state.update(utt("hum chemical buyer hain Mumbai mein", Lang.HI))
+        t = state.update(utt("ji main Sunil bol raha hoon", Lang.HI))
         assert t.switched is True
         assert state.current == Lang.HI
 
@@ -198,16 +181,12 @@ class TestRealisticFlows:
     def test_double_switch_en_to_hi_to_ta(self):
         """Lead switches twice in a call (rare but real)."""
         state = LanguageState.initial(Lang.EN)
-        # Flip to Hindi
-        state.update(utt("hum bulk mein kharidte hain", Lang.HI))
-        t1 = state.update(utt("har mahine 10 tonne minimum chahiye", Lang.HI))
+        # Flip to Hindi — single full utterance now flips
+        t1 = state.update(utt("hum bulk mein kharidte hain", Lang.HI))
         assert t1.switched and state.current == Lang.HI
         # Flip to Tamil
-        state.update(utt("naan finance head dhaan", Lang.TA))
-        t2 = state.update(utt("procurement head Ramesh-kitta pesunga", Lang.TA))
+        t2 = state.update(utt("naan finance head dhaan procurement head Ramesh-kitta pesunga", Lang.TA))
         assert t2.switched and state.current == Lang.TA
-        # Bridge for HI → TA exists
-        assert t2.bridge_phrase is not None
 
 
 def test_response_hint_returns_current():

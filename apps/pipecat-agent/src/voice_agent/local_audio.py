@@ -294,6 +294,38 @@ def record_until_enter(device: int | None = None) -> bytes:
     return pcm
 
 
+def auto_record(duration_sec: float = 8.0, device: int | None = None) -> bytes:
+    """Record for a fixed duration — no enter needed. Like a real phone call."""
+    sd, np = _get_sounddevice()
+
+    sd.stop()
+    time.sleep(0.15)
+
+    frames = int(duration_sec * SAMPLE_RATE_HZ)
+    recording = sd.rec(frames, samplerate=SAMPLE_RATE_HZ, channels=CHANNELS, dtype="int16", device=device)
+    sd.wait()
+
+    flat = recording.flatten()
+    peak = int(np.abs(flat).max())
+
+    if peak < 100:
+        return b""
+
+    nonzero_idx = np.nonzero(flat)[0]
+    if len(nonzero_idx) == 0:
+        return b""
+
+    end = min(nonzero_idx[-1] + SAMPLE_RATE_HZ // 4, len(flat))
+    pcm = flat[:end].tobytes()
+    duration_ms = len(pcm) / (SAMPLE_RATE_HZ * SAMPLE_WIDTH_BYTES) * 1000
+    print(f"  [captured {duration_ms:.0f}ms, peak={peak}]")
+
+    if peak > 30000:
+        print("  [WARNING: clipping — reduce mic volume]")
+
+    return pcm
+
+
 def play_pcm(pcm: bytes, sample_rate: int) -> None:
     try:
         import sounddevice as sd  # type: ignore[import-not-found]
@@ -432,18 +464,24 @@ async def run_local(args: argparse.Namespace) -> None:
         )
         device = args.device
 
+        auto_record_sec = args.record_seconds
+
         while True:
             if ctx.should_hard_stop():
                 print("[hard cap reached — ending call]")
                 break
 
-            line = input("Press ENTER to record your turn (or 'q' to quit): ").strip()
-            if line.lower() == "q":
-                break
+            if auto_record_sec > 0:
+                print(f"\n  [listening {auto_record_sec}s...]")
+                pcm = auto_record(duration_sec=auto_record_sec, device=device)
+            else:
+                line = input("Press ENTER to record (or 'q' to quit): ").strip()
+                if line.lower() == "q":
+                    break
+                pcm = record_until_enter(device=device)
 
-            pcm = record_until_enter(device=device)
             if not pcm:
-                print("[empty recording — check mic. Try: --list-devices]")
+                print("[no speech detected]")
                 continue
 
             wav = pcm_to_wav_bytes(pcm)
@@ -502,6 +540,7 @@ def main() -> None:
     p.add_argument("--tenant-id", default="local-test-tenant")
     p.add_argument("--list-devices", action="store_true", help="List audio devices and exit")
     p.add_argument("--device", type=int, default=None, help="Input device index (from --list-devices)")
+    p.add_argument("--record-seconds", type=float, default=8.0, help="Auto-record duration (0=press-enter mode)")
     args = p.parse_args()
     asyncio.run(run_local(args))
 

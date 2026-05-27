@@ -230,9 +230,9 @@ def system_prompt_addendum(state: ConversationState) -> str:
     parts: list[str] = []
 
     parts.append(
-        "<format>Short and natural — 1-2 sentences. NO formal Hindi. "
-        "NEVER say your name or company name — lead already knows. "
-        "NEVER say namaste or greeting. Start with: achha/ji/sir/dekhiye.</format>"
+        "<format>ROMAN SCRIPT ONLY — never Devanagari. "
+        "1-2 sentences. End with a question (?). "
+        "Never say your name or company. Never greet.</format>"
     )
 
     parts.append(f"<current_phase>{state.phase.value}</current_phase>")
@@ -254,11 +254,11 @@ def system_prompt_addendum(state: ConversationState) -> str:
         parts.append("<nudge>Add filler: ji/haan/achha</nudge>")
 
     phase_hints = {
-        Phase.CONNECT: "Rapport। Business के बारे में पूछो।",
-        Phase.DISCOVER: "Pain point guess करो।",
-        Phase.QUALIFY: "Volume, timeline, supplier पूछो। Value बताओ।",
-        Phase.CLOSE: "Quote/callback offer करो। Wrap up।",
-        Phase.EXTENSION: "Buying signal strong। Qualify + close।",
+        Phase.CONNECT: "Ask about their business. ONE question only.",
+        Phase.DISCOVER: "Find their pain — delivery? pricing? quality?",
+        Phase.QUALIFY: "Ask volume, timeline, current supplier. Give ONE value point.",
+        Phase.CLOSE: "Close: isi number pe WhatsApp pe quote. Then goodbye.",
+        Phase.EXTENSION: "Strong signal. Push for close.",
     }
     hint = phase_hints.get(state.phase)
     if hint:

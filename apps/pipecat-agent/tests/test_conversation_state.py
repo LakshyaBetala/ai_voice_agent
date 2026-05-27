@@ -147,11 +147,11 @@ class TestCloseLoop:
 
 class TestPhaseDirectives:
     @pytest.mark.parametrize("phase,expected_substring", [
-        (Phase.CONNECT, "Rapport"),
-        (Phase.DISCOVER, "Pain"),
-        (Phase.QUALIFY, "Volume"),
-        (Phase.CLOSE, "Quote"),
-        (Phase.EXTENSION, "Buying signal"),
+        (Phase.CONNECT, "business"),
+        (Phase.DISCOVER, "pain"),
+        (Phase.QUALIFY, "volume"),
+        (Phase.CLOSE, "close"),
+        (Phase.EXTENSION, "close"),
     ])
     def test_addendum_includes_phase_directive(self, phase: Phase, expected_substring: str):
         s = ConversationState(phase=phase)
