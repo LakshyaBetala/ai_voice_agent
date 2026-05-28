@@ -112,6 +112,10 @@ MIN_UTTERANCE_MS = 400       # noise floor — drop buffers shorter than this
 # Stream sample rate must match the Voicebot applet's configured rate.
 EXOTEL_STREAM_SAMPLE_RATE = int(os.environ.get("EXOTEL_STREAM_SAMPLE_RATE", "8000"))
 
+# Output volume boost. TTS sits below telephony full-scale, so Priya can sound
+# faint on a phone earpiece. 1.0 = off; 1.4-1.8 lifts her; >2 risks clipping.
+EXOTEL_TTS_GAIN = float(os.environ.get("EXOTEL_TTS_GAIN", "1.0"))
+
 # Peak-amplitude threshold below which a raw-PCM chunk counts as "silent".
 # Mirrors the local harness VAD (SILENCE_THRESHOLD=300).
 _PCM_SILENCE_THRESHOLD = 300
@@ -190,7 +194,7 @@ async def _play_wav(
 ) -> float:
     """Stream already-synthesized WAV to the lead, record it as a Priya turn.
     Returns the audio's playback duration in seconds (for the mute window)."""
-    pcm = tts_wav_to_exotel_pcm(wav, EXOTEL_STREAM_SAMPLE_RATE)
+    pcm = tts_wav_to_exotel_pcm(wav, EXOTEL_STREAM_SAMPLE_RATE, gain=EXOTEL_TTS_GAIN)
     await _send_pcm_chunked(session, pcm)
     if text.strip():
         active.ctx.conversation_state.record_priya_turn(text)
@@ -486,7 +490,8 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                     if isinstance(event, AudioChunkEvent):
                         try:
                             out_pcm = tts_wav_to_exotel_pcm(
-                                event.audio, EXOTEL_STREAM_SAMPLE_RATE
+                                event.audio, EXOTEL_STREAM_SAMPLE_RATE,
+                                gain=EXOTEL_TTS_GAIN,
                             )
                             await _send_pcm_chunked(session, out_pcm)
                             speaking_until = (

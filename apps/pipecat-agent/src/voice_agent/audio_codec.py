@@ -166,11 +166,30 @@ def exotel_pcm_to_wav_for_stt(pcm: bytes, sample_rate: int) -> bytes:
     return pcm16_to_wav(pcm, sample_rate)
 
 
-def tts_wav_to_exotel_pcm(wav_bytes: bytes, target_rate: int) -> bytes:
+def apply_gain(pcm: bytes, gain: float) -> bytes:
+    """Scale signed-16 PCM by `gain` with hard clipping at ±full-scale.
+
+    smallest.ai (and most TTS) output sits well below telephony full-scale, so
+    Priya can sound faint on a phone earpiece. A gain of ~1.4-1.8x lifts her to
+    a comfortable level; beyond ~2x risks clipping distortion.
+    """
+    if gain == 1.0 or not pcm:
+        return pcm
+    arr = array.array("h")
+    arr.frombytes(pcm[: len(pcm) // 2 * 2])
+    for i in range(len(arr)):
+        v = int(arr[i] * gain)
+        arr[i] = 32767 if v > 32767 else (-32768 if v < -32768 else v)
+    return arr.tobytes()
+
+
+def tts_wav_to_exotel_pcm(wav_bytes: bytes, target_rate: int, gain: float = 1.0) -> bytes:
     """TTS WAV (Cartesia 16 kHz or Sarvam 8/16 kHz) → raw PCM at Exotel's rate.
 
     Returns headerless signed-16 little-endian PCM, resampled to
-    `target_rate` (the rate the Voicebot applet is configured for).
+    `target_rate` (the rate the Voicebot applet is configured for), optionally
+    amplified by `gain` so Priya isn't faint on the phone.
     """
     pcm, sr = wav_to_pcm16(wav_bytes)
-    return pcm16_resample(pcm, sr, target_rate)
+    resampled = pcm16_resample(pcm, sr, target_rate)
+    return apply_gain(resampled, gain)
