@@ -90,6 +90,7 @@ class TurnCompleteEvent:
     total_sentences: int
     cache_hits: int
     end_call: bool = False  # True → WS handler hangs up after audio finishes
+    lead_intent: str = "normal"  # classify_lead_intent result, for call logs
 
 
 StreamEvent = AudioChunkEvent | TurnCompleteEvent
@@ -320,6 +321,7 @@ async def run_turn_streaming(
         total_sentences=sentence_idx,
         cache_hits=cache_hits,
         end_call=end_call,
+        lead_intent=intent,
     )
 
 

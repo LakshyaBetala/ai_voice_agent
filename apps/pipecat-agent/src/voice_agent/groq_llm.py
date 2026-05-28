@@ -18,8 +18,11 @@ GROQ_BASE = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
+# max_tokens kept tight: a real cold-call agent never monologues. ~120 tokens
+# is 1-2 punchy Hinglish/Tanglish sentences — enough to answer, short enough to
+# stay human. (Slot-extraction calls override this via generation_config.)
 DEFAULT_GENERATION_CONFIG: dict[str, Any] = {
-    "max_tokens": 300,
+    "max_tokens": 120,
     "temperature": 0.7,
     "top_p": 0.9,
 }

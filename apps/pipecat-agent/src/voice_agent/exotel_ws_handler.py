@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import array
 import asyncio
+import datetime
 import logging
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -61,6 +63,32 @@ from .turn_orchestrator import TurnDependencies, run_turn
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# -- Human-readable per-call transcript log --------------------------------
+#
+# Appends every turn (what the lead said + detected language + confidence,
+# what Priya replied in which language, intent, and latency) to a flat file
+# so the conversation — words, slang, language switches, smoothness — can be
+# reviewed after a call. Override path with CALL_LOG_PATH; off if set to "".
+_CALL_LOG_PATH = os.environ.get(
+    "CALL_LOG_PATH",
+    str(Path(__file__).resolve().parents[2] / "call-logs.txt"),
+)
+
+
+def _clog(call_id: str, kind: str, msg: str) -> None:
+    """Log one call event to stderr AND append to the transcript file."""
+    short = call_id[:8]
+    logger.info("[%s] %s: %s", short, kind, msg)
+    if not _CALL_LOG_PATH:
+        return
+    ts = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    try:
+        with open(_CALL_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{ts} [{short}] {kind:6} {msg}\n")
+    except Exception:
+        logger.debug("call-log write failed", exc_info=True)
 
 
 # -- In-process call registry ----------------------------------------------
@@ -393,6 +421,11 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                         "call_id=%s intro played (%s, %.1fs): %s",
                         call_id, source, dur, intro[:60],
                     )
+                    _clog(
+                        call_id, "START",
+                        f"lang={active.ctx.language_state.current.value} "
+                        f"lead={active.ctx.lead_first_name or '-'} | INTRO: {intro}",
+                    )
                 except Exception:
                     logger.exception("call_id=%s intro playback failed", call_id)
                 buffer.clear()
@@ -498,11 +531,30 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                                 max(speaking_until, time.monotonic())
                                 + _audio_dur_sec(out_pcm, EXOTEL_STREAM_SAMPLE_RATE)
                             )
+                            _clog(
+                                call_id, "PRIYA",
+                                f"[{'cache' if event.used_cache else 'tts'} "
+                                f"s{event.sentence_idx}] {event.text}",
+                            )
                         except Exception:
                             logger.exception("audio chunk send failed")
                     elif isinstance(event, TurnCompleteEvent):
                         active.slots = event.slots
                         turn_end_call = event.end_call
+                        lm = event.latency_ms
+                        _clog(
+                            call_id, "LEAD",
+                            f"[{event.lead_lang} conf={event.lead_confidence:.2f} "
+                            f"intent={event.lead_intent}] {event.lead_text}",
+                        )
+                        _clog(
+                            call_id, "TURN",
+                            f"reply_lang={event.language_transition.current_language.value} "
+                            f"stt={lm.get('stt_ms', 0)}ms "
+                            f"llm={lm.get('llm_first_sentence_ms', 0)}ms "
+                            f"tts={lm.get('tts_first_sentence_ms', 0)}ms "
+                            f"total={lm.get('total_ms', 0)}ms",
+                        )
                         persist_turn_async(
                             active.db,
                             call_id=active.ctx.call_id,
@@ -554,6 +606,11 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                 active.ctx.turn_idx,
                 active.ctx.phrase_cache_hits,
                 active.ctx.billed_units(),
+            )
+            _clog(
+                call_id, "END",
+                f"elapsed={active.ctx.elapsed():.1f}s turns={active.ctx.turn_idx} "
+                f"cache_hits={active.ctx.phrase_cache_hits}",
             )
         else:
             logger.info("call_id=%s ended before stream start (no audio)", call_id)
