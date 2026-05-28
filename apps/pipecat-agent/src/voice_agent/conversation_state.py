@@ -89,6 +89,15 @@ class ConversationState:
     # robot loop of "alright, anything else?" / "no" / "alright, anything else?"
     consecutive_close_attempts: int = 0
 
+    # How many times the lead has been off-topic (pizza, "kaun bol raha",
+    # random chat). Priya probes ONCE for a real requirement; on the second
+    # off-topic turn we end the call. See classify_lead_intent.
+    off_topic_count: int = 0
+
+    # How many times the lead has refused. First refusal → ask for a referral;
+    # second → warm goodbye + hang up. ("Try our best, then stop.")
+    reject_count: int = 0
+
     # Phase entry timestamps for telemetry + debugging.
     phase_entered_at: dict[Phase, float] = field(default_factory=dict)
 

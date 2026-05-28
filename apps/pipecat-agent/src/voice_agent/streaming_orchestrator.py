@@ -89,6 +89,7 @@ class TurnCompleteEvent:
     latency_ms: dict[str, int]
     total_sentences: int
     cache_hits: int
+    end_call: bool = False  # True → WS handler hangs up after audio finishes
 
 
 StreamEvent = AudioChunkEvent | TurnCompleteEvent
@@ -187,9 +188,16 @@ async def run_turn_streaming(
     if context_summary:
         system_msg += f"\n\n<call_context>{context_summary}</call_context>"
 
+    intent = classify_lead_intent(stt_result.transcript, ctx.conversation_state)
+    if intent == "reject":
+        ctx.conversation_state.reject_count += 1
+    elif intent == "offtopic":
+        ctx.conversation_state.off_topic_count += 1
+    end_call = should_end_call(intent, ctx.conversation_state)
+
     user_msg = _format_user_message(
         stt_result.transcript, prior_slots, ctx.conversation_state,
-        lang=transition.current_language.value,
+        lang=transition.current_language.value, intent=intent,
     )
 
     # ---- 5. Start streaming LLM + slot extraction in parallel ----------
@@ -307,6 +315,7 @@ async def run_turn_streaming(
         latency_ms=timings,
         total_sentences=sentence_idx,
         cache_hits=cache_hits,
+        end_call=end_call,
     )
 
 
@@ -373,19 +382,78 @@ def _pain_hypothesis_for_turn(ctx, slots, lang: str) -> Optional[str]:
     )
 
 
-def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
-    turn = len(conv.recent_priya_turns)
-    is_silence = "silence" in lead_text.lower() or not lead_text.strip()
+_CLOSE_WORDS = [
+    "bhej do", "bhej de", "bhej dena", "bhej dijiye",
+    "send karo", "send kar do", "send kar dena",
+    "whatsapp karo", "whatsapp pe bhej", "whatsapp bhej",
+    "quote bhejo", "quote bhej do",
+    "anuppunga", "anuppu", "send pannunga",
+    "theek hai", "okay done", "kar dijiye",
+    "bye", "thank you", "thanks", "bye bye",
+    "dekh leta", "dekh lunga", "dekhta hoon", "dekhti hoon",
+]
+_REJECT_WORDS = [
+    "not interested", "interested nahi", "nahi chahiye", "nahin chahiye",
+    "zaroorat nahi", "zarurat nahi", "zaroorat nahin", "mat karo",
+    "band karo", "rehne do", "interest nahi", "call mat", "pareshan mat",
+    "venam", "thevai illa",  # Tamil: don't want / not needed
+]
+# Clearly wrong person / wrong number → end politely, no probe.
+_WRONG_WORDS = [
+    "galat number", "wrong number", "kaun bol", "kaun hai", "personal call",
+]
+# Off-topic / not a business prospect → probe ONCE for a real requirement,
+# then end. ("can't sell chemicals to a tiger" — but try first.)
+_OFFTOPIC_WORDS = [
+    "student", "padhta", "padhai", "college", "school",
+    "pizza", "khana", "biryani", "time pass", "timepass", "bored",
+]
+_ABUSE_WORDS = [
+    "chutiya", "bhosdi", "madarchod", "behenchod", "gaand", "lavda",
+    "randi", "harami", "kutte", "saala kutta", "fuck", "bastard",
+]
 
-    close_words = ["bhej do", "bhej de", "bhej dena", "bhej dijiye",
-                    "send karo", "send kar do", "send kar dena",
-                    "whatsapp karo", "whatsapp pe bhej", "whatsapp bhej",
-                    "quote bhejo", "quote bhej do",
-                    "anuppunga", "anuppu", "send pannunga",
-                    "theek hai", "okay done", "kar dijiye",
-                    "bye", "thank you", "thanks", "bye bye",
-                    "dekh leta", "dekh lunga", "dekhta hoon", "dekhti hoon"]
-    is_close = any(w in lead_text.lower() for w in close_words) if not is_silence else False
+
+def classify_lead_intent(lead_text: str, conv) -> str:
+    """Coarse intent for end-of-call decisions. One of:
+    silence | close | reject | wrong | abuse | offtopic | normal.
+    """
+    t = lead_text.lower().strip()
+    if not t or "silence" in t:
+        return "silence"
+    if any(w in t for w in _ABUSE_WORDS):
+        return "abuse"
+    if any(w in t for w in _CLOSE_WORDS):
+        return "close"
+    if any(w in t for w in _OFFTOPIC_WORDS):
+        return "offtopic"
+    if any(w in t for w in _REJECT_WORDS):
+        return "reject"
+    if any(w in t for w in _WRONG_WORDS):
+        return "wrong"
+    return "normal"
+
+
+def should_end_call(intent: str, conv) -> bool:
+    """Decide whether Priya hangs up after this turn.
+
+    We give the lead a chance before ending: a rejection first gets a
+    referral ask, an off-topic turn first gets one requirement probe.
+    """
+    if intent in ("close", "abuse", "wrong"):
+        return True
+    if intent == "reject" and conv.reject_count >= 2:
+        return True
+    if intent == "offtopic" and conv.off_topic_count >= 2:
+        return True
+    if conv.should_force_end():
+        return True
+    return False
+
+
+def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN", intent: str = "normal"):
+    turn = len(conv.recent_priya_turns)
+    is_silence = intent == "silence"
 
     parts = ['[ROMAN SCRIPT ONLY. No Devanagari. No Tamil script.]']
 
@@ -400,16 +468,30 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN"):
         parts.append('[HINGLISH]')
 
     if is_silence:
-        parts.append('Lead silent. Ask: "Sir, sun pa rahe hain?"')
-    elif is_close:
-        parts.append(f'Lead: "{lead_text}"')
-        parts.append('Lead wants to CLOSE. Say: "Bilkul sir, isi number pe quote aa jayega. Thank you!" STOP. No more selling.')
+        parts.append('Lead silent. Ask once gently: "Sir, sun pa rahe hain?"')
+        return "\n".join(parts)
+
+    parts.append(f'Lead: "{lead_text}"')
+
+    if intent == "close":
+        parts.append('Lead wants to CLOSE. Say ONLY: "Bilkul sir, isi number pe WhatsApp pe quote aa jayega. Thank you!" Then STOP.')
+    elif intent == "reject":
+        if conv.reject_count >= 2:
+            parts.append('Still no. Warm exit: "Koi baat nahi sir, zarurat ho to SPC yaad rakhiyega. Good day!" Then STOP.')
+        else:
+            parts.append('Lead not interested. Don\'t push the sale — ask for a REFERRAL once: "Koi baat nahi sir. Aapke kisi jaan-pehchaan ko chemicals supply chahiye to bata dijiye, hum acchi service denge?"')
+    elif intent == "abuse":
+        parts.append('Lead abusive. Say ONLY: "Theek hai sir, good day." Nothing else.')
+    elif intent == "wrong":
+        parts.append('Wrong person / off-topic. Say ONLY: "Sorry sir, aapka time liya. Good day!" Then STOP.')
+    elif intent == "offtopic":
+        if conv.off_topic_count >= 2:
+            parts.append('Still off-topic. End: "Koi baat nahi sir, good day!" STOP.')
+        else:
+            parts.append('Lead off-topic. Probe ONCE: "Sir, koi chemicals ya industrial supply ki requirement hai aapke business mein?"')
     else:
-        parts.append(f'Lead: "{lead_text}"')
         if slots.product_interest:
             parts.append(f"Known: {slots.product_interest}")
-
-    if not is_close:
         if slots.buying_confidence >= 0.7:
             parts.append("High interest → push for close.")
         elif conv.consecutive_close_attempts >= 2:

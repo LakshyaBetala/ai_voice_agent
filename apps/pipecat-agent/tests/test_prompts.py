@@ -22,7 +22,7 @@ class TestIsUsableFirstName:
 class TestBuildIntroText:
     def test_english_with_name(self):
         out = build_intro_text(lang="en-IN", first_name="Ravi")
-        assert "Hello Ravi" in out
+        assert "Hi Ravi" in out
         assert "Supreme Petrochemicals" in out
 
     def test_hindi_with_name(self):

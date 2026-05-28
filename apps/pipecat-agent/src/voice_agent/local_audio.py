@@ -43,6 +43,7 @@ from .r2_client import R2Client, R2Config, R2ConfigError
 from .sarvam_stt import STTResult, transcribe_batch
 from .sarvam_tts import synthesize as tts_synthesize
 from .cartesia_tts import synthesize as cartesia_synthesize
+from .elevenlabs_tts import synthesize as elevenlabs_synthesize
 from .gemini_llm import generate as gemini_generate, stream_generate as gemini_stream
 from .groq_llm import generate as groq_generate, stream_generate as groq_stream
 from .streaming_orchestrator import (
@@ -97,6 +98,35 @@ class _CartesiaTTSAdapter:
             voice=self.voice, client=self.client,
         )
         return result.audio
+
+
+@dataclass
+class _ElevenLabsTTSAdapter:
+    api_key: str
+    client: httpx.AsyncClient
+    voice_id: str
+    model: str = "eleven_flash_v2_5"
+
+    async def synth(self, text: str, lang: str) -> bytes:
+        result = await elevenlabs_synthesize(
+            text=text, lang=lang, api_key=self.api_key,
+            voice_id=self.voice_id, model=self.model, client=self.client,
+        )
+        return result.audio
+
+
+@dataclass
+class _HybridTTSAdapter:
+    """Route by language: ElevenLabs for Hindi/English (hyper-realistic),
+    Cartesia for Tamil (dedicated Tamil voice). Falls back to primary for
+    anything else."""
+    primary: Any  # ElevenLabs adapter (hi/en)
+    tamil: Any    # Cartesia adapter (ta)
+
+    async def synth(self, text: str, lang: str) -> bytes:
+        if lang and lang.lower().startswith("ta"):
+            return await self.tamil.synth(text, lang)
+        return await self.primary.synth(text, lang)
 
 
 @dataclass
@@ -394,6 +424,9 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
     groq_model = env.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     cartesia_key = env.get("CARTESIA_API_KEY", "")
     cartesia_voice = env.get("CARTESIA_VOICE", "arushi")
+    eleven_key = env.get("ELEVENLABS_API_KEY", "")
+    eleven_voice = env.get("ELEVENLABS_VOICE_ID", "")
+    eleven_model = env.get("ELEVENLABS_MODEL", "eleven_flash_v2_5")
     if not sarvam_key and not cartesia_key:
         raise SystemExit("SARVAM_API_KEY or CARTESIA_API_KEY must be set in .env")
     if not gemini_key and not groq_key:
@@ -420,7 +453,24 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         print(f"[LLM: Gemini {gemini_model}]")
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
 
-    if cartesia_key:
+    if eleven_key:
+        if not eleven_voice:
+            print("[warn] ELEVENLABS_VOICE_ID unset — using default (US accent). "
+                  "Set an Indian Hindi female voice_id for natural Hindi.")
+        el_adapter = _ElevenLabsTTSAdapter(
+            api_key=eleven_key, client=http,
+            voice_id=eleven_voice or "EXAVITQu4vr4xnSDxMaL", model=eleven_model,
+        )
+        if cartesia_key:
+            print(f"[TTS: ElevenLabs {eleven_model} (hi/en) + Cartesia nithya (ta)]")
+            tts_adapter = _HybridTTSAdapter(
+                primary=el_adapter,
+                tamil=_CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice="nithya"),
+            )
+        else:
+            print(f"[TTS: ElevenLabs {eleven_model}]")
+            tts_adapter = el_adapter
+    elif cartesia_key:
         print(f"[TTS: Cartesia Sonic-3.5 voice={cartesia_voice}]")
         tts_adapter = _CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice=cartesia_voice)
     else:

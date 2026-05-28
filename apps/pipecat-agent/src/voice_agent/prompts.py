@@ -47,39 +47,17 @@ def build_intro_text(*, lang: str, first_name: str | None) -> str:
     won't match what the agent thinks it said.
     """
     name = first_name.strip() if is_usable_first_name(first_name) else ""
+    # Keep openers SHORT — a snappy hello + who + a quick ask. A long
+    # monologue intro sounds robotic and eats the first 8 seconds.
     if lang == "en-IN":
-        if name:
-            return (
-                f"Hello {name}, this is Priya calling from Supreme Petrochemicals, Chennai. "
-                "I just wanted two minutes of your time regarding chemicals supply. Is now okay?"
-            )
-        return (
-            "Hello, this is Priya from Supreme Petrochemicals, Chennai. "
-            "Can I take two minutes of your time regarding chemicals supply?"
-        )
+        who = f"Hi {name}, " if name else "Hi, "
+        return f"{who}this is Priya from Supreme Petrochemicals, Chennai. Got two minutes?"
     if lang == "hi-IN":
-        if name:
-            return (
-                f"Haan ji namaste, {name} ji? Main Priya, "
-                "Supreme Petrochemicals Chennai se bol rahi hoon. "
-                "Sir, bas do minute — aapki chemicals requirement ke baare mein baat karni thi?"
-            )
-        return (
-            "Namaste ji, main Priya bol rahi hoon "
-            "Supreme Petrochemicals Chennai se. "
-            "Sir, bas do minute — chemicals supply ke baare mein baat karni thi?"
-        )
+        who = f"Haan {name} ji, namaste! " if name else "Namaste sir! "
+        return f"{who}Main Priya, Supreme Petrochemicals Chennai se. Do minute baat ho sakti hai?"
     # ta-IN
-    if name:
-        return (
-            f"Vanakkam {name} sir, naan Priya, Supreme Petrochemicals "
-            "Chennai-la irundhu call panren. Ungalukku rendu nimisham time irukka "
-            "chemicals supply pathi pesanum?"
-        )
-    return (
-        "Vanakkam sir, naan Priya, Supreme Petrochemicals Chennai-la irundhu. "
-        "Rendu nimisham time irukka?"
-    )
+    who = f"Vanakkam {name} sir, " if name else "Vanakkam sir, "
+    return f"{who}naan Priya, Supreme Petrochemicals Chennai. Rendu nimisham pesalama?"
 
 
 def build_system_message(

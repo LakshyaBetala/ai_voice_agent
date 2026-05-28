@@ -52,7 +52,7 @@ def test_system_message_reflects_current_language_after_switch():
 def test_intro_text_uses_first_name_and_default_language():
     ctx = _ctx(lang="en-IN", name="Ravi")
     txt = render_intro_text(ctx)
-    assert "Hello Ravi" in txt
+    assert "Hi Ravi" in txt
 
 
 def test_intro_text_falls_back_when_name_unusable():

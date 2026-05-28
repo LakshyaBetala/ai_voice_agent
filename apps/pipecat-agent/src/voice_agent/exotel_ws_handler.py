@@ -79,6 +79,12 @@ class _ActiveCall:
 
 _active_calls: dict[str, _ActiveCall] = {}
 
+# call_id of the most recently triggered outbound call. Exotel's static
+# Voicebot applet URL means the WS arrives with no CustomField to match on,
+# so for the (single-concurrent) demo we fall back to this — that's the call
+# we just dialed, carrying the right lead name + language.
+_last_pending_call_id: str | None = None
+
 
 # -- Inbound-audio buffering (simple silence VAD) ---------------------------
 
@@ -213,6 +219,8 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
     )
     db = _build_db_client()
     _active_calls[call_id] = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps, db=db)
+    global _last_pending_call_id
+    _last_pending_call_id = call_id
 
     status_cb_base = os.environ.get("EXOTEL_STATUS_CALLBACK_URL", "").rstrip("/")
     status_callback = (
@@ -254,8 +262,10 @@ def _resolve_active_call(path_call_id: str, custom_field: str | None) -> tuple[s
     the CustomField echoed in the start frame. Falls back to the path id,
     then bootstraps a fresh context so we never drop a live call.
     """
-    for key in (custom_field, path_call_id):
+    for key in (custom_field, path_call_id, _last_pending_call_id):
         if key and key in _active_calls:
+            if key == _last_pending_call_id and key not in (custom_field, path_call_id):
+                logger.info("WS matched last-pending call_id=%s (name carried)", key)
             return key, _active_calls[key]
 
     call_id = custom_field or path_call_id
@@ -371,6 +381,7 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                 voice_id=active.deps.voice_id,
             )
 
+            turn_end_call = False
             try:
                 async for event in run_turn_streaming(
                     ctx=active.ctx,
@@ -392,6 +403,7 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                             logger.exception("audio chunk send failed")
                     elif isinstance(event, TurnCompleteEvent):
                         active.slots = event.slots
+                        turn_end_call = event.end_call
                         persist_turn_async(
                             active.db,
                             call_id=active.ctx.call_id,
@@ -416,6 +428,15 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             # chunk above) already keeps us deaf until her reply finishes.
             buffer.clear()
             buffered_ms = silence_ms = voiced_ms = 0
+
+            if turn_end_call:
+                # Let the goodbye line finish playing, then hang up by
+                # closing the WS (Exotel ends the call on disconnect).
+                wait = speaking_until - time.monotonic()
+                if wait > 0:
+                    await asyncio.sleep(wait + 0.3)
+                logger.info("call_id=%s hanging up (end_call)", call_id)
+                break
 
             if active.ctx.should_hard_stop():
                 await session.send_clear()
@@ -507,8 +528,10 @@ def _build_deps_from_env() -> TurnDependencies:
     per-call clients keep tests trivial."""
     from .local_audio import (
         _CartesiaTTSAdapter,
+        _ElevenLabsTTSAdapter,
         _GeminiAdapter,
         _GroqAdapter,
+        _HybridTTSAdapter,
         _NoOpR2,
         _SarvamSTTAdapter,
         _SarvamTTSAdapter,
@@ -521,6 +544,9 @@ def _build_deps_from_env() -> TurnDependencies:
     groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
     cartesia_key = os.environ.get("CARTESIA_API_KEY", "")
     cartesia_voice = os.environ.get("CARTESIA_VOICE", "arushi")
+    eleven_key = os.environ.get("ELEVENLABS_API_KEY", "")
+    eleven_voice = os.environ.get("ELEVENLABS_VOICE_ID", "")
+    eleven_model = os.environ.get("ELEVENLABS_MODEL", "eleven_flash_v2_5")
     if not sarvam_key:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -552,8 +578,21 @@ def _build_deps_from_env() -> TurnDependencies:
     else:
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
 
-    if cartesia_key:
-        tts_adapter: Any = _CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice=cartesia_voice)
+    if eleven_key:
+        el_adapter = _ElevenLabsTTSAdapter(
+            api_key=eleven_key, client=http,
+            voice_id=eleven_voice or "EXAVITQu4vr4xnSDxMaL", model=eleven_model,
+        )
+        if cartesia_key:
+            # Hindi/English → ElevenLabs (realism); Tamil → Cartesia nithya.
+            tts_adapter: Any = _HybridTTSAdapter(
+                primary=el_adapter,
+                tamil=_CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice="nithya"),
+            )
+        else:
+            tts_adapter = el_adapter
+    elif cartesia_key:
+        tts_adapter = _CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice=cartesia_voice)
     else:
         tts_adapter = _SarvamTTSAdapter(api_key=sarvam_key, client=http)
 
