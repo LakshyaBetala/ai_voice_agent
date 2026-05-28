@@ -644,6 +644,7 @@ def _build_deps_from_env() -> TurnDependencies:
     smallest_voice = os.environ.get("SMALLEST_VOICE", "meher")
     smallest_model = os.environ.get("SMALLEST_MODEL", "lightning_v3.1_pro")
     smallest_rate = int(os.environ.get("SMALLEST_SAMPLE_RATE", "16000"))
+    smallest_speed = float(os.environ.get("SMALLEST_SPEED", "1.0"))
     if not sarvam_key:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -680,7 +681,7 @@ def _build_deps_from_env() -> TurnDependencies:
         # code-mixing + clean English-term pronunciation. Primary for all langs.
         tts_adapter: Any = _SmallestTTSAdapter(
             api_key=smallest_key, client=http, voice=smallest_voice,
-            model=smallest_model, sample_rate=smallest_rate,
+            model=smallest_model, sample_rate=smallest_rate, speed=smallest_speed,
         )
     elif eleven_key:
         el_adapter = _ElevenLabsTTSAdapter(

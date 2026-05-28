@@ -113,12 +113,13 @@ class _SmallestTTSAdapter:
     voice: str = SMALLEST_DEFAULT_VOICE
     model: str = SMALLEST_DEFAULT_MODEL
     sample_rate: int = SMALLEST_DEFAULT_RATE
+    speed: float = 1.0
 
     async def synth(self, text: str, lang: str) -> bytes:
         result = await smallest_synthesize(
             text=text, lang=lang, api_key=self.api_key,
             voice=self.voice, model=self.model,
-            sample_rate=self.sample_rate, client=self.client,
+            sample_rate=self.sample_rate, speed=self.speed, client=self.client,
         )
         return result.audio
 
@@ -454,6 +455,7 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
     smallest_voice = env.get("SMALLEST_VOICE", SMALLEST_DEFAULT_VOICE)
     smallest_model = env.get("SMALLEST_MODEL", SMALLEST_DEFAULT_MODEL)
     smallest_rate = int(env.get("SMALLEST_SAMPLE_RATE", str(SMALLEST_DEFAULT_RATE)))
+    smallest_speed = float(env.get("SMALLEST_SPEED", "1.0"))
     if not sarvam_key and not cartesia_key and not smallest_key:
         raise SystemExit("SARVAM_API_KEY, SMALLEST_API_KEY or CARTESIA_API_KEY must be set in .env")
     if not gemini_key and not groq_key:
@@ -485,7 +487,7 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
               f"@ {smallest_rate}Hz (hi/en/ta, one voice)]")
         tts_adapter = _SmallestTTSAdapter(
             api_key=smallest_key, client=http, voice=smallest_voice,
-            model=smallest_model, sample_rate=smallest_rate,
+            model=smallest_model, sample_rate=smallest_rate, speed=smallest_speed,
         )
     elif eleven_key:
         if not eleven_voice:
