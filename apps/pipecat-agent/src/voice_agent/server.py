@@ -14,9 +14,15 @@ campaigns-worker should reach it.
 """
 from __future__ import annotations
 
+import logging
 import os
 import uuid
 from typing import Any
+
+# Surface our INFO-level call diagnostics (intro played, turns, latency).
+# Without this Python's lastResort handler swallows everything below WARNING.
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("voice_agent").setLevel(logging.INFO)
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field

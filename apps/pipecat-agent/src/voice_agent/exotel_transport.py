@@ -40,6 +40,7 @@ import httpx
 
 
 EXOTEL_BASE_DEFAULT = "https://api.exotel.com"
+EXOTEL_BASE_IN = "https://api.in.exotel.com"  # Mumbai / India region
 EXOTEL_BASE_SG = "https://api.sg.exotel.com"  # Singapore region
 EXOTEL_BASE_US = "https://api.us.exotel.com"  # US region
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -48,13 +49,16 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 def base_url_for_region(region: str | None) -> str:
     """Map an account region code to the correct Exotel API base.
 
-    Exotel routes accounts by region. The dashboard shows your region under
-    "API Credentials → Account region". Falls back to the default (India)
-    when unset or unknown — the API will return a clear error if wrong.
+    Exotel routes accounts by region and REJECTS credentials presented to the
+    wrong regional endpoint with a 401. The dashboard shows your region under
+    "API Credentials → Account region". `api.exotel.com` is the legacy global
+    endpoint; India (Mumbai) accounts must hit api.in.exotel.com.
     """
     if not region:
         return EXOTEL_BASE_DEFAULT
     r = region.strip().lower()
+    if r in {"in", "india", "mumbai", "ap-south-1"}:
+        return EXOTEL_BASE_IN
     if r in {"sg", "singapore", "ap-southeast-1"}:
         return EXOTEL_BASE_SG
     if r in {"us", "us-east-1"}:
@@ -70,10 +74,16 @@ class ExotelError(RuntimeError):
 
 @dataclass(frozen=True)
 class OutboundCallRequest:
-    to: str  # E.164 lead number
-    from_: str  # ExoPhone (Exotel-provided caller ID)
-    stream_url: str  # WSS URL Exotel will connect to once answered
-    custom_field: str | None = None  # echoed back; we put call_id here
+    to: str  # E.164 lead number — Exotel dials this (the "From" leg of connect)
+    caller_id: str  # ExoPhone shown to the lead as caller ID
+    # AgentStream path: Url points at an Exotel App flow whose first applet is
+    # the Voicebot applet (the WSS endpoint is configured INSIDE that applet in
+    # App Bazaar, not passed here). Format:
+    #   http://my.exotel.com/{sid}/exoml/start_voice/{app_id}
+    flow_url: str | None = None
+    # Legacy Plivo-style direct StreamUrl. Only used when flow_url is unset.
+    stream_url: str | None = None
+    custom_field: str | None = None  # echoed back in the start frame; call_id
     status_callback: str | None = None  # POST'd by Exotel when call ends
     record: bool = True
     time_limit_seconds: int = 360  # matches HARD_CAP_SECONDS
@@ -98,26 +108,34 @@ async def place_outbound_call(
 ) -> OutboundCallResponse:
     """POST /v1/Accounts/{sid}/Calls/connect — places one outbound call.
 
-    Exotel will dial `to`, when answered open a WebSocket to `stream_url`
-    and pipe bidirectional audio. The call lifecycle webhooks (started,
-    completed, recording_ready) hit the URLs configured on your App in
-    the Exotel dashboard; not handled here.
+    For AgentStream: Exotel dials `to` (the lead) showing `caller_id`
+    (the ExoPhone). When answered it runs the App flow at `flow_url`,
+    whose Voicebot applet opens the bidirectional WebSocket to us. The
+    call lifecycle webhooks hit the URLs configured on your App in the
+    Exotel dashboard plus the `status_callback` here.
     """
     if not account_sid or not api_key or not api_token:
         raise ExotelError("missing Exotel credentials")
+    if not (request.flow_url or request.stream_url):
+        raise ExotelError("OutboundCallRequest needs flow_url or stream_url")
 
     base = base_url_for_region(region)
     url = f"{base}/v1/Accounts/{account_sid}/Calls/connect.json"
     # Exotel uses HTTP Basic auth with API_KEY:API_TOKEN.
     auth = httpx.BasicAuth(api_key, api_token)
 
+    # In connect-to-flow, `From` is the number Exotel dials (the lead) and
+    # `Url` is the flow it runs once answered. `CallerId` is the ExoPhone.
     form = {
-        "From": request.from_,
-        "To": request.to,
-        "StreamUrl": request.stream_url,
+        "From": request.to,
+        "CallerId": request.caller_id,
         "Record": "true" if request.record else "false",
         "TimeLimit": str(request.time_limit_seconds),
     }
+    if request.flow_url:
+        form["Url"] = request.flow_url
+    else:
+        form["StreamUrl"] = request.stream_url  # type: ignore[assignment]
     if request.custom_field:
         form["CustomField"] = request.custom_field
     if request.status_callback:
@@ -252,13 +270,32 @@ def parse_inbound_frame(raw: str) -> StreamFrame | None:
         return None
 
     event = msg.get("event")
+    if event == "connected":
+        # Exotel's first frame is a bare {"event":"connected"} handshake. No
+        # identifiers yet — ignore it; the "start" frame carries the IDs.
+        return None
     if event == "start":
         # Some Exotel deployments wrap identifiers under "start", others flat.
         start = msg.get("start") or msg
+        custom_field = start.get("custom_field") or start.get("customField")
+        if not custom_field:
+            # AgentStream passes API CustomField via custom_parameters.
+            params = start.get("custom_parameters") or start.get("customParameters") or {}
+            if isinstance(params, dict):
+                custom_field = (
+                    params.get("call_id")
+                    or params.get("CustomField")
+                    or params.get("custom_field")
+                )
         return StreamStartFrame(
-            stream_sid=str(start.get("stream_sid") or start.get("streamSid") or ""),
+            stream_sid=str(
+                msg.get("stream_sid")
+                or start.get("stream_sid")
+                or start.get("streamSid")
+                or ""
+            ),
             call_sid=str(start.get("call_sid") or start.get("callSid") or ""),
-            custom_field=start.get("custom_field") or start.get("customField"),
+            custom_field=custom_field,
         )
     if event == "media":
         media = msg.get("media") or {}

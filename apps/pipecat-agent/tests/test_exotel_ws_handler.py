@@ -15,10 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from voice_agent import exotel_ws_handler
-from voice_agent.audio_codec import pcm16_to_mulaw
 from voice_agent.exotel_transport import (
     base_url_for_region,
     EXOTEL_BASE_DEFAULT,
+    EXOTEL_BASE_IN,
     EXOTEL_BASE_SG,
     EXOTEL_BASE_US,
 )
@@ -33,7 +33,7 @@ def test_region_helper_routes_sg_singapore_and_us():
     assert base_url_for_region("Singapore") == EXOTEL_BASE_SG
     assert base_url_for_region("us") == EXOTEL_BASE_US
     assert base_url_for_region(None) == EXOTEL_BASE_DEFAULT
-    assert base_url_for_region("in") == EXOTEL_BASE_DEFAULT  # falls back
+    assert base_url_for_region("in") == EXOTEL_BASE_IN  # Mumbai endpoint
 
 
 # -- WS handler: end-to-end with fake deps --------------------------------
@@ -49,9 +49,9 @@ class FakeSTT:
 
 class FakeTTS:
     async def synth(self, text: str, lang: str) -> bytes:
-        # Return a tiny WAV the codec can convert to μ-law without issue.
+        # Return a tiny 16 kHz WAV the codec resamples to the stream rate.
         from voice_agent.audio_codec import pcm16_to_wav
-        return pcm16_to_wav(b"\x00\x00\x00\x00", 8000)
+        return pcm16_to_wav(b"\x10\x00\x20\x00\x30\x00\x40\x00", 16000)
 
 
 class FakeLLM:
@@ -114,27 +114,31 @@ def _stop_frame() -> str:
     return json.dumps({"event": "stop"})
 
 
-def _noisy_chunk(byte_count: int = 160) -> bytes:
-    """Build a chunk that won't trip the silence VAD (loud edge bytes)."""
+# Exotel streams raw 16-bit PCM. At the default 8 kHz stream rate, a
+# 1600-byte chunk = 800 samples = 100ms (matching Exotel's framing).
+def _noisy_chunk(byte_count: int = 1600) -> bytes:
+    """Loud PCM chunk (peak well above the silence threshold)."""
+    # 0xC040 little-endian s16 = -16320 → clearly above _PCM_SILENCE_THRESHOLD.
     return bytes([0x40, 0xC0] * (byte_count // 2))
 
 
-def _silent_chunk(byte_count: int = 160) -> bytes:
-    return bytes([0x7F] * byte_count)
+def _silent_chunk(byte_count: int = 1600) -> bytes:
+    """Pure-zero PCM = peak amplitude 0 → silent."""
+    return bytes(byte_count)
 
 
 def test_ws_handler_runs_one_turn_on_silence_flush(app_with_fakes):
-    """Send start + 25 noisy + 40 silent chunks → orchestrator runs once and we
-    receive Priya's μ-law audio back, then stop frame ends the call."""
+    """start + 6 noisy (600ms) + 10 silent (1s) → orchestrator runs once and we
+    receive Priya's PCM audio back, then stop frame ends the call."""
     client = TestClient(app_with_fakes)
 
     with client.websocket_connect("/exotel/stream/test-call-1") as ws:
         ws.send_text(_start_frame("test-call-1"))
-        # 25 noisy chunks (500ms speech) → above MIN_UTTERANCE_MS
-        for _ in range(25):
+        # 6 noisy chunks (600ms speech) → above MIN_UTTERANCE_MS (400ms)
+        for _ in range(6):
             ws.send_text(_media_frame(_noisy_chunk()))
-        # 40 silent chunks (800ms quiet) → triggers SILENCE_MS_THRESHOLD flush
-        for _ in range(40):
+        # 10 silent chunks (1s quiet) → crosses SILENCE_MS_THRESHOLD (700ms)
+        for _ in range(10):
             ws.send_text(_media_frame(_silent_chunk()))
 
         # Expect at least one outbound media frame from Priya before we send stop.
@@ -146,19 +150,17 @@ def test_ws_handler_runs_one_turn_on_silence_flush(app_with_fakes):
         ws.send_text(_stop_frame())
 
 
-def test_ws_handler_skips_buffers_shorter_than_min_utterance(app_with_fakes):
-    """A tiny burst of noise + silence should NOT trigger the orchestrator."""
+def test_ws_handler_does_not_crash_on_short_burst(app_with_fakes):
+    """A tiny burst of noise + silence should close cleanly without crashing."""
     client = TestClient(app_with_fakes)
 
     with client.websocket_connect("/exotel/stream/tiny-1") as ws:
         ws.send_text(_start_frame("tiny-1"))
-        # Only 5 noisy chunks = 100ms, below MIN_UTTERANCE_MS=400ms
-        for _ in range(5):
+        for _ in range(2):
             ws.send_text(_media_frame(_noisy_chunk()))
-        for _ in range(40):
+        for _ in range(10):
             ws.send_text(_media_frame(_silent_chunk()))
         ws.send_text(_stop_frame())
-        # Connection should close cleanly without any outbound media.
 
 
 def test_ws_handler_handles_unknown_call_id_by_bootstrapping(app_with_fakes):
@@ -188,17 +190,21 @@ def test_trigger_outbound_call_calls_exotel_and_registers_context(monkeypatch, a
     monkeypatch.setenv("EXOTEL_SID", "almmatix1")
     monkeypatch.setenv("EXOTEL_API_KEY", "k")
     monkeypatch.setenv("EXOTEL_API_TOKEN", "t")
-    monkeypatch.setenv("EXOTEL_REGION", "sg")
-    monkeypatch.setenv("EXOTEL_FROM_NUMBER", "04446973311")
-    monkeypatch.setenv("EXOTEL_STREAM_URL", "wss://agent.almmatix.in")
+    monkeypatch.setenv("EXOTEL_REGION", "in")
+    monkeypatch.setenv("EXOTEL_FROM_NUMBER", "04447877048")
+    monkeypatch.setenv(
+        "EXOTEL_FLOW_URL",
+        "http://my.exotel.com/almmatix1/exoml/start_voice/99001",
+    )
 
     captured = {}
 
     async def fake_place(*, request, account_sid, api_key, api_token, region=None, client=None, timeout=10.0):
         from voice_agent.exotel_transport import OutboundCallResponse
         captured["to"] = request.to
-        captured["from"] = request.from_
-        captured["stream_url"] = request.stream_url
+        captured["caller_id"] = request.caller_id
+        captured["flow_url"] = request.flow_url
+        captured["custom_field"] = request.custom_field
         captured["region"] = region
         return OutboundCallResponse(call_sid="exo-123", status="queued", raw={})
 
@@ -220,10 +226,12 @@ def test_trigger_outbound_call_calls_exotel_and_registers_context(monkeypatch, a
     body = resp.json()
     assert body["call_sid"] == "exo-123"
     assert body["status"] == "queued"
-    assert body["stream_url"].endswith("/exotel/stream/lead-42")
+    assert body["flow_url"].endswith("/start_voice/99001")
     assert captured["to"] == "+919876543210"
-    assert captured["from"] == "04446973311"
-    assert captured["region"] == "sg"
+    assert captured["caller_id"] == "04447877048"
+    assert captured["flow_url"].endswith("/start_voice/99001")
+    assert captured["custom_field"] == "lead-42"
+    assert captured["region"] == "in"
     # The context should have been pre-registered under the lead_id.
     assert "lead-42" in exotel_ws_handler._active_calls
 
@@ -232,7 +240,8 @@ def test_trigger_outbound_call_bubbles_exotel_error_as_502(monkeypatch, app_with
     monkeypatch.setenv("EXOTEL_SID", "almmatix1")
     monkeypatch.setenv("EXOTEL_API_KEY", "k")
     monkeypatch.setenv("EXOTEL_API_TOKEN", "t")
-    monkeypatch.setenv("EXOTEL_STREAM_URL", "wss://x")
+    monkeypatch.setenv("EXOTEL_FROM_NUMBER", "04447877048")
+    monkeypatch.setenv("EXOTEL_FLOW_URL", "http://my.exotel.com/x/exoml/start_voice/1")
 
     async def fake_place(**kwargs):
         from voice_agent.exotel_transport import ExotelError

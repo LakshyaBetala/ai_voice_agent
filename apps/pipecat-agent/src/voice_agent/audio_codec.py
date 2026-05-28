@@ -1,17 +1,23 @@
-"""G.711 μ-law codec + WAV stripping helpers.
+"""Telephony audio codec + WAV stripping helpers.
 
-Exotel and Plivo both deliver call audio as 8 kHz μ-law (mu-law / G.711).
-Sarvam STT accepts WAV PCM. Sarvam TTS returns 8 kHz WAV PCM. So per turn:
+Two transports, two on-the-wire formats:
 
-  Lead → Exotel (μ-law) → us → PCM-WAV → Sarvam STT
-  Sarvam TTS → PCM-WAV → us → μ-law → Exotel → Lead
+  - Plivo (legacy): 8 kHz μ-law / G.711. See pcm16_to_mulaw / mulaw_to_pcm16.
+  - Exotel AgentStream (current): raw 16-bit PCM (slin), configurable sample
+    rate (8 kHz default). NOT μ-law. See the exotel_* / pcm16_resample helpers.
+
+Per turn on Exotel:
+
+  Lead → Exotel (raw PCM @ stream rate) → us → WAV → Sarvam STT
+  Cartesia/Sarvam TTS (WAV @ 16 kHz) → us → resample → raw PCM @ stream rate → Exotel → Lead
 
 This module owns the conversion. Stdlib only — no audioop in 3.13+ so we
 ship a tiny pure-Python implementation. Performance is fine for one
-call's worth of 8 kHz mono audio (~8 KB/s).
+call's worth of mono audio.
 """
 from __future__ import annotations
 
+import array
 import io
 import struct
 import wave
@@ -114,6 +120,57 @@ def tts_wav_to_mulaw_8k(wav_bytes: bytes) -> bytes:
 
 
 def mulaw_to_wav_for_stt(mu_law: bytes, sample_rate: int = 8000) -> bytes:
-    """End-to-end: Exotel μ-law chunk → WAV ready to send to Sarvam STT."""
+    """End-to-end: Plivo μ-law chunk → WAV ready to send to Sarvam STT."""
     pcm = mulaw_to_pcm16(mu_law)
     return pcm16_to_wav(pcm, sample_rate)
+
+
+# -- Exotel AgentStream: raw 16-bit PCM (slin) -----------------------------
+
+def pcm16_resample(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
+    """Resample mono signed-16 little-endian PCM via linear interpolation.
+
+    Used to bridge Cartesia's 16 kHz TTS output to Exotel's stream rate
+    (8 kHz by default) and vice-versa. Linear interp is plenty for
+    telephony-band speech and avoids a numpy/scipy dependency.
+    """
+    if src_rate == dst_rate or not pcm:
+        return pcm
+    src = array.array("h")
+    src.frombytes(pcm[: len(pcm) // 2 * 2])  # drop a trailing odd byte if any
+    n_src = len(src)
+    if n_src == 0:
+        return b""
+    n_dst = max(1, round(n_src * dst_rate / src_rate))
+    dst = array.array("h", bytes(2 * n_dst))
+    if n_dst == 1:
+        dst[0] = src[0]
+        return dst.tobytes()
+    ratio = (n_src - 1) / (n_dst - 1)
+    for i in range(n_dst):
+        pos = i * ratio
+        idx = int(pos)
+        frac = pos - idx
+        s0 = src[idx]
+        s1 = src[idx + 1] if idx + 1 < n_src else s0
+        dst[i] = int(s0 + (s1 - s0) * frac)
+    return dst.tobytes()
+
+
+def exotel_pcm_to_wav_for_stt(pcm: bytes, sample_rate: int) -> bytes:
+    """Exotel inbound raw PCM chunk → WAV ready for Sarvam STT.
+
+    Exotel hands us raw 16-bit mono PCM at the stream's configured rate;
+    Sarvam STT just needs it in a WAV container (it resamples internally).
+    """
+    return pcm16_to_wav(pcm, sample_rate)
+
+
+def tts_wav_to_exotel_pcm(wav_bytes: bytes, target_rate: int) -> bytes:
+    """TTS WAV (Cartesia 16 kHz or Sarvam 8/16 kHz) → raw PCM at Exotel's rate.
+
+    Returns headerless signed-16 little-endian PCM, resampled to
+    `target_rate` (the rate the Voicebot applet is configured for).
+    """
+    pcm, sr = wav_to_pcm16(wav_bytes)
+    return pcm16_resample(pcm, sr, target_rate)

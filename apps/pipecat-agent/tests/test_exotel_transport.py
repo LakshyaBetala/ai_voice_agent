@@ -44,8 +44,8 @@ async def test_place_outbound_call_posts_form_and_auth():
         resp = await place_outbound_call(
             request=OutboundCallRequest(
                 to="+919876543210",
-                from_="+918041234567",
-                stream_url="wss://agent.almmatix.in/stream/abc",
+                caller_id="04447877048",
+                flow_url="http://my.exotel.com/almmatix1m/exoml/start_voice/12345",
                 custom_field="call-id-xyz",
             ),
             account_sid="acct_sid",
@@ -57,8 +57,11 @@ async def test_place_outbound_call_posts_form_and_auth():
     assert "Calls/connect.json" in captured["url"]
     assert "acct_sid" in captured["url"]
     assert captured["auth"].startswith("Basic ")
-    assert "To=%2B919876543210" in captured["body"]
-    assert "StreamUrl=wss" in captured["body"]
+    # Exotel dials the lead (From) and shows the ExoPhone (CallerId).
+    assert "From=%2B919876543210" in captured["body"]
+    assert "CallerId=04447877048" in captured["body"]
+    assert "Url=http" in captured["body"]
+    assert "start_voice" in captured["body"]
     assert "CustomField=call-id-xyz" in captured["body"]
     assert resp.call_sid == "exo-call-123"
     assert resp.status == "queued"
@@ -74,7 +77,7 @@ async def test_place_outbound_call_raises_on_http_error():
         with pytest.raises(ExotelError, match="401"):
             await place_outbound_call(
                 request=OutboundCallRequest(
-                    to="+91x", from_="+91y", stream_url="wss://x"
+                    to="+91x", caller_id="+91y", flow_url="http://x"
                 ),
                 account_sid="s", api_key="k", api_token="t", client=client,
             )
@@ -84,8 +87,17 @@ async def test_place_outbound_call_raises_on_http_error():
 async def test_place_outbound_call_rejects_missing_creds():
     with pytest.raises(ExotelError, match="missing"):
         await place_outbound_call(
-            request=OutboundCallRequest(to="+91", from_="+91", stream_url="wss://x"),
+            request=OutboundCallRequest(to="+91", caller_id="+91", flow_url="http://x"),
             account_sid="", api_key="", api_token="",
+        )
+
+
+@pytest.mark.asyncio
+async def test_place_outbound_call_requires_flow_or_stream():
+    with pytest.raises(ExotelError, match="flow_url or stream_url"):
+        await place_outbound_call(
+            request=OutboundCallRequest(to="+91", caller_id="+91"),
+            account_sid="s", api_key="k", api_token="t",
         )
 
 
@@ -119,6 +131,28 @@ def test_parse_start_frame_with_nested_layout():
     assert frame.stream_sid == "ss-2"
     assert frame.call_sid == "cs-2"
     assert frame.custom_field == "lead-456"
+
+
+def test_parse_start_frame_with_custom_parameters():
+    # AgentStream passes the API CustomField via start.custom_parameters.
+    msg = json.dumps({
+        "event": "start",
+        "stream_sid": "ss-3",
+        "start": {
+            "call_sid": "cs-3",
+            "custom_parameters": {"CustomField": "lead-789"},
+        },
+    })
+    frame = parse_inbound_frame(msg)
+    assert isinstance(frame, StreamStartFrame)
+    assert frame.stream_sid == "ss-3"
+    assert frame.call_sid == "cs-3"
+    assert frame.custom_field == "lead-789"
+
+
+def test_parse_connected_event_returns_none():
+    # Exotel's first handshake frame carries no identifiers; ignore it.
+    assert parse_inbound_frame(json.dumps({"event": "connected"})) is None
 
 
 def test_parse_media_frame_decodes_base64():

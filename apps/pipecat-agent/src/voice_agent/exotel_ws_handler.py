@@ -18,9 +18,11 @@ Mounted under voice_agent.server at:
 """
 from __future__ import annotations
 
+import array
 import asyncio
 import logging
 import os
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,7 +30,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field
 
-from .audio_codec import mulaw_to_wav_for_stt, tts_wav_to_mulaw_8k
+from .audio_codec import exotel_pcm_to_wav_for_stt, tts_wav_to_exotel_pcm
 from .exotel_transport import (
     ExotelError,
     ExotelStreamSession,
@@ -39,6 +41,7 @@ from .exotel_transport import (
     place_outbound_call,
 )
 from .pipeline import HARD_CAP_SECONDS, CallContext, make_initial_context
+from .prompts import build_intro_text
 from .qualification import QualificationSlots
 from .r2_client import R2Client, R2Config, R2ConfigError
 from .streaming_orchestrator import (
@@ -79,24 +82,80 @@ _active_calls: dict[str, _ActiveCall] = {}
 
 # -- Inbound-audio buffering (simple silence VAD) ---------------------------
 
-# Exotel sends 20ms μ-law chunks (160 bytes each at 8 kHz). We accumulate
-# them and flush to STT when either:
-#   - silence threshold met (low RMS for `SILENCE_MS_THRESHOLD`)
+# Exotel AgentStream sends ~100ms raw 16-bit PCM chunks (3200 bytes at
+# 16 kHz, 1600 at 8 kHz). We accumulate them and flush to STT when either:
+#   - silence threshold met (low peak amplitude for `SILENCE_MS_THRESHOLD`)
 #   - hard buffer cap reached (avoids runaway when lead never pauses)
 
 SILENCE_MS_THRESHOLD = 700  # ms of quiet → assume utterance ended
 MAX_BUFFER_MS = 8000         # hard cap so STT call doesn't grow unbounded
 MIN_UTTERANCE_MS = 400       # noise floor — drop buffers shorter than this
-EXOTEL_CHUNK_MS = 20         # Exotel's framing
 
-# μ-law amplitude threshold below which a chunk is "silent". μ-law 0xFF/0x00
-# encodes near-zero, edges of the byte represent loud audio.
-def _is_silent_chunk(mu_law: bytes, threshold: int = 8) -> bool:
-    """Rough VAD: count how many bytes are near the silent midpoint."""
-    if not mu_law:
+# Stream sample rate must match the Voicebot applet's configured rate.
+EXOTEL_STREAM_SAMPLE_RATE = int(os.environ.get("EXOTEL_STREAM_SAMPLE_RATE", "8000"))
+
+# Peak-amplitude threshold below which a raw-PCM chunk counts as "silent".
+# Mirrors the local harness VAD (SILENCE_THRESHOLD=300).
+_PCM_SILENCE_THRESHOLD = 300
+
+
+def _is_silent_pcm(pcm: bytes, threshold: int = _PCM_SILENCE_THRESHOLD) -> bool:
+    """Rough VAD on signed-16 little-endian PCM: peak below threshold = silent."""
+    if len(pcm) < 2:
         return True
-    near_silent = sum(1 for b in mu_law if abs(b - 0x7F) <= threshold or abs(b - 0x80) <= threshold)
-    return near_silent > len(mu_law) * 0.85
+    arr = array.array("h")
+    arr.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not arr:
+        return True
+    return max(abs(s) for s in arr) < threshold
+
+
+def _chunk_ms(pcm: bytes, sample_rate: int) -> int:
+    """Duration in ms of a raw-PCM chunk (2 bytes/sample, mono)."""
+    return int((len(pcm) // 2) / sample_rate * 1000)
+
+
+# Half-duplex: we stream Priya's whole reply into Exotel's buffer instantly,
+# but it PLAYS over several seconds. While it plays (plus a tail for the
+# line to settle) we ignore all inbound audio — otherwise we transcribe her
+# own echo and she talks over herself ("rapping"). This is time-based, not
+# silence-based, because we can't reliably hear playback end on a phone line.
+SPEAK_TAIL_SEC = 0.7
+
+# Only run a turn when the lead actually SPOKE this much (non-silent audio).
+# Pure silence/comfort-noise must never trigger a response, or Priya nags
+# "Sir, sun pa rahe hain?" on every quiet moment.
+MIN_VOICED_MS = 350
+
+# Outbound frames to Exotel must be small (multiples of 320 bytes / ~100ms).
+# 1600 bytes = 800 samples = 100ms at 8 kHz. We slice TTS audio into these.
+_OUT_FRAME_BYTES = 1600
+
+
+def _audio_dur_sec(pcm: bytes, sample_rate: int) -> float:
+    """Playback duration of raw 16-bit mono PCM."""
+    return (len(pcm) // 2) / sample_rate
+
+
+async def _send_pcm_chunked(session: ExotelStreamSession, pcm: bytes) -> None:
+    """Send raw PCM to Exotel in small, applet-friendly frames."""
+    for i in range(0, len(pcm), _OUT_FRAME_BYTES):
+        await session.send_audio(pcm[i : i + _OUT_FRAME_BYTES])
+
+
+async def _play_text(
+    session: ExotelStreamSession, active: "_ActiveCall", text: str
+) -> float:
+    """Synthesize `text`, stream it to the lead, record it as a Priya turn.
+    Returns the audio's playback duration in seconds (for the mute window)."""
+    if not text.strip():
+        return 0.0
+    lang = active.ctx.language_state.current.value
+    wav = await active.deps.tts.synth(text, lang)
+    pcm = tts_wav_to_exotel_pcm(wav, EXOTEL_STREAM_SAMPLE_RATE)
+    await _send_pcm_chunked(session, pcm)
+    active.ctx.conversation_state.record_priya_turn(text)
+    return _audio_dur_sec(pcm, EXOTEL_STREAM_SAMPLE_RATE)
 
 
 # -- Outbound trigger endpoint ---------------------------------------------
@@ -114,32 +173,35 @@ class PlaceCallRequest(BaseModel):
 class PlaceCallResponse(BaseModel):
     call_sid: str
     status: str
-    stream_url: str
+    flow_url: str
 
 
 @router.post("/exotel/calls", response_model=PlaceCallResponse)
 async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
     """Place an outbound Exotel call. Returns the Exotel call_sid synchronously.
 
-    Audio flow begins when Exotel WS connects to /exotel/stream/{call_id}.
+    Exotel dials the lead, then runs the App flow (EXOTEL_FLOW_URL) whose
+    Voicebot applet opens a WebSocket to /exotel/stream/{call_id}. The
+    applet's WSS URL is configured in App Bazaar (static); we correlate the
+    pre-built context via CustomField=call_id, echoed in the start frame.
     """
     sid = os.environ.get("EXOTEL_SID", "")
     api_key = os.environ.get("EXOTEL_API_KEY", "")
     api_token = os.environ.get("EXOTEL_API_TOKEN", "")
     region = os.environ.get("EXOTEL_REGION", "")
-    from_default = os.environ.get("EXOTEL_FROM_NUMBER", "")
-    stream_base = os.environ.get("EXOTEL_STREAM_URL", "").rstrip("/")
-    if not (sid and api_key and api_token and stream_base):
+    caller_id = req.from_ or os.environ.get("EXOTEL_FROM_NUMBER", "")
+    flow_url = os.environ.get("EXOTEL_FLOW_URL", "").strip()
+    if not (sid and api_key and api_token and caller_id and flow_url):
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "EXOTEL_SID / EXOTEL_API_KEY / EXOTEL_API_TOKEN / EXOTEL_STREAM_URL must be set",
+            "EXOTEL_SID / EXOTEL_API_KEY / EXOTEL_API_TOKEN / EXOTEL_FROM_NUMBER / "
+            "EXOTEL_FLOW_URL must be set",
         )
 
     call_id = req.lead_id or f"call-{os.urandom(6).hex()}"
-    stream_url = f"{stream_base}/exotel/stream/{call_id}"
 
-    # Pre-build the CallContext + dependencies. They're keyed by call_id and
-    # picked up when Exotel's WS connects.
+    # Pre-build the CallContext + dependencies. Keyed by call_id; picked up
+    # when Exotel's WS connects and reports CustomField=call_id.
     deps = _build_deps_from_env()
     ctx = make_initial_context(
         call_id=call_id,
@@ -152,15 +214,17 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
     db = _build_db_client()
     _active_calls[call_id] = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps, db=db)
 
-    status_cb_base = os.environ.get("EXOTEL_STATUS_CALLBACK_URL", stream_base).rstrip("/")
-    status_callback = f"{status_cb_base}/exotel/status/{call_id}"
+    status_cb_base = os.environ.get("EXOTEL_STATUS_CALLBACK_URL", "").rstrip("/")
+    status_callback = (
+        f"{status_cb_base}/exotel/status/{call_id}" if status_cb_base else None
+    )
 
     try:
         resp = await place_outbound_call(
             request=OutboundCallRequest(
                 to=req.to,
-                from_=req.from_ or from_default,
-                stream_url=stream_url,
+                caller_id=caller_id,
+                flow_url=flow_url,
                 custom_field=call_id,
                 status_callback=status_callback,
                 record=True,
@@ -176,62 +240,116 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"exotel: {exc}") from exc
 
     return PlaceCallResponse(
-        call_sid=resp.call_sid, status=resp.status, stream_url=stream_url
+        call_sid=resp.call_sid, status=resp.status, flow_url=flow_url
     )
 
 
 # -- WebSocket handler ------------------------------------------------------
+
+def _resolve_active_call(path_call_id: str, custom_field: str | None) -> tuple[str, _ActiveCall]:
+    """Find the pre-built call context for this WS connection.
+
+    The Voicebot applet's WSS URL is static in App Bazaar, so the path
+    `call_id` may be a placeholder (e.g. "live"). The authoritative key is
+    the CustomField echoed in the start frame. Falls back to the path id,
+    then bootstraps a fresh context so we never drop a live call.
+    """
+    for key in (custom_field, path_call_id):
+        if key and key in _active_calls:
+            return key, _active_calls[key]
+
+    call_id = custom_field or path_call_id
+    logger.warning("WS start for unknown call_id=%s; bootstrapping default ctx", call_id)
+    active = _ActiveCall(
+        ctx=make_initial_context(
+            call_id=call_id, tenant_id="unknown", lead_id=call_id,
+            lead_first_name=None, lead_company=None, default_lang="hi-IN",
+        ),
+        slots=QualificationSlots(),
+        deps=_build_deps_from_env(),
+    )
+    _active_calls[call_id] = active
+    return call_id, active
+
 
 @router.websocket("/exotel/stream/{call_id}")
 async def exotel_stream(ws: WebSocket, call_id: str) -> None:
     """Exotel opens this WS when the call connects. Drives one full conversation."""
     await ws.accept()
 
-    active = _active_calls.get(call_id)
-    if active is None:
-        # Late connection / restart. Build a fresh context so we don't drop
-        # the call — better to qualify generically than reject.
-        logger.warning("WS connected for unknown call_id=%s; bootstrapping default ctx", call_id)
-        active = _ActiveCall(
-            ctx=make_initial_context(
-                call_id=call_id, tenant_id="unknown", lead_id=call_id,
-                lead_first_name=None, lead_company=None, default_lang="hi-IN",
-            ),
-            slots=QualificationSlots(),
-            deps=_build_deps_from_env(),
-        )
-        _active_calls[call_id] = active
-
     session = ExotelStreamSession(_FastapiWSAdapter(ws))
+    active: _ActiveCall | None = None
     buffer = bytearray()
     silence_ms = 0
     buffered_ms = 0
+    voiced_ms = 0  # how much actual (non-silent) speech is in the buffer
+    # Wall-clock time until which Priya is still speaking; ignore inbound
+    # audio until then so she doesn't transcribe her own echo.
+    speaking_until = 0.0
 
     try:
         async for frame in session:
             if isinstance(frame, StreamStartFrame):
-                logger.info("call_id=%s stream_sid=%s started", call_id, frame.stream_sid)
+                call_id, active = _resolve_active_call(call_id, frame.custom_field)
+                logger.info(
+                    "call_id=%s stream_sid=%s started (custom_field=%s)",
+                    call_id, frame.stream_sid, frame.custom_field,
+                )
+                # Priya opens the call — greet first, then wait for the lead.
+                try:
+                    intro = build_intro_text(
+                        lang=active.ctx.language_state.current.value,
+                        first_name=active.ctx.lead_first_name,
+                    )
+                    dur = await _play_text(session, active, intro)
+                    speaking_until = time.monotonic() + dur
+                    logger.info(
+                        "call_id=%s intro played (%.1fs): %s", call_id, dur, intro[:60]
+                    )
+                except Exception:
+                    logger.exception("call_id=%s intro playback failed", call_id)
+                buffer.clear()
+                buffered_ms = silence_ms = voiced_ms = 0
                 continue
             if isinstance(frame, StreamStopFrame):
                 logger.info("call_id=%s stopped: %s", call_id, frame.reason)
                 break
             if not isinstance(frame, StreamMediaFrame):
                 continue
+            if active is None:
+                # Media before start (shouldn't happen) — bootstrap from path.
+                call_id, active = _resolve_active_call(call_id, None)
 
             chunk = frame.audio_bytes
-            buffer.extend(chunk)
-            buffered_ms += EXOTEL_CHUNK_MS
-            if _is_silent_chunk(chunk):
-                silence_ms += EXOTEL_CHUNK_MS
+
+            # Half-duplex: while Priya's reply is still playing (+ tail),
+            # ignore everything — it's her own voice echoing back.
+            if time.monotonic() < speaking_until + SPEAK_TAIL_SEC:
+                buffer.clear()
+                buffered_ms = silence_ms = voiced_ms = 0
+                if active.ctx.should_hard_stop():
+                    await session.send_clear()
+                    break
+                continue
+
+            chunk_ms = _chunk_ms(chunk, EXOTEL_STREAM_SAMPLE_RATE)
+            silent = _is_silent_pcm(chunk)
+            if silent:
+                silence_ms += chunk_ms
             else:
                 silence_ms = 0
+                voiced_ms += chunk_ms
+            # Don't accumulate leading silence — only buffer once speech starts.
+            if voiced_ms > 0:
+                buffer.extend(chunk)
+                buffered_ms += chunk_ms
 
-            should_flush = (
-                (silence_ms >= SILENCE_MS_THRESHOLD and buffered_ms >= MIN_UTTERANCE_MS)
-                or buffered_ms >= MAX_BUFFER_MS
+            # Flush only when the lead actually spoke, then paused. Pure
+            # silence never flushes → Priya stays quiet and waits naturally.
+            should_flush = voiced_ms >= MIN_VOICED_MS and (
+                silence_ms >= SILENCE_MS_THRESHOLD or buffered_ms >= MAX_BUFFER_MS
             )
             if not should_flush:
-                # Hard-stop check between chunks so we don't run past the cap.
                 if active.ctx.should_hard_stop():
                     await session.send_clear()
                     break
@@ -240,10 +358,9 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             # Run the STREAMING orchestrator — audio chunks arrive as
             # sentences are generated, so the lead hears Priya's first
             # sentence ~1.5s after they stop talking (vs 8-10s sequential).
-            wav = mulaw_to_wav_for_stt(bytes(buffer), sample_rate=8000)
+            wav = exotel_pcm_to_wav_for_stt(bytes(buffer), EXOTEL_STREAM_SAMPLE_RATE)
             buffer.clear()
-            buffered_ms = 0
-            silence_ms = 0
+            buffered_ms = silence_ms = voiced_ms = 0
 
             streaming_deps = StreamingDependencies(
                 stt=active.deps.stt,
@@ -263,8 +380,13 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                 ):
                     if isinstance(event, AudioChunkEvent):
                         try:
-                            await session.send_audio(
-                                tts_wav_to_mulaw_8k(event.audio)
+                            out_pcm = tts_wav_to_exotel_pcm(
+                                event.audio, EXOTEL_STREAM_SAMPLE_RATE
+                            )
+                            await _send_pcm_chunked(session, out_pcm)
+                            speaking_until = (
+                                max(speaking_until, time.monotonic())
+                                + _audio_dur_sec(out_pcm, EXOTEL_STREAM_SAMPLE_RATE)
                             )
                         except Exception:
                             logger.exception("audio chunk send failed")
@@ -290,6 +412,11 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             except Exception:
                 logger.exception("call_id=%s streaming orchestrator failure", call_id)
 
+            # Priya just spoke — reset capture. speaking_until (set per audio
+            # chunk above) already keeps us deaf until her reply finishes.
+            buffer.clear()
+            buffered_ms = silence_ms = voiced_ms = 0
+
             if active.ctx.should_hard_stop():
                 await session.send_clear()
                 break
@@ -298,14 +425,17 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
     finally:
         # Keep the slots/context for a short grace period so a webhook can
         # still read final state; in production push to DB instead.
-        logger.info(
-            "call_id=%s ended elapsed=%.1fs turns=%d cache_hits=%d billed_units=%d",
-            call_id,
-            active.ctx.elapsed(),
-            active.ctx.turn_idx,
-            active.ctx.phrase_cache_hits,
-            active.ctx.billed_units(),
-        )
+        if active is not None:
+            logger.info(
+                "call_id=%s ended elapsed=%.1fs turns=%d cache_hits=%d billed_units=%d",
+                call_id,
+                active.ctx.elapsed(),
+                active.ctx.turn_idx,
+                active.ctx.phrase_cache_hits,
+                active.ctx.billed_units(),
+            )
+        else:
+            logger.info("call_id=%s ended before stream start (no audio)", call_id)
 
 
 # -- StatusCallback webhook (Exotel POSTs after call ends) -----------------
@@ -369,17 +499,37 @@ class _FastapiWSAdapter:
 
 
 def _build_deps_from_env() -> TurnDependencies:
-    """Build TurnDependencies from env vars. Each call gets fresh httpx clients
-    in production we'd pool these but per-call clients keep tests trivial."""
-    from .local_audio import _GeminiAdapter, _NoOpR2, _SarvamSTTAdapter, _SarvamTTSAdapter
+    """Build TurnDependencies from env vars. Mirrors local_audio._build_deps so
+    the phone path uses the SAME low-latency stack as the local harness:
+    Sarvam STT + Groq Llama-4-Scout LLM + Cartesia Sonic-3.5 TTS.
+
+    Each call gets fresh httpx clients; in production we'd pool these but
+    per-call clients keep tests trivial."""
+    from .local_audio import (
+        _CartesiaTTSAdapter,
+        _GeminiAdapter,
+        _GroqAdapter,
+        _NoOpR2,
+        _SarvamSTTAdapter,
+        _SarvamTTSAdapter,
+    )
 
     sarvam_key = os.environ.get("SARVAM_API_KEY", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-    if not sarvam_key or not gemini_key:
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    cartesia_key = os.environ.get("CARTESIA_API_KEY", "")
+    cartesia_voice = os.environ.get("CARTESIA_VOICE", "arushi")
+    if not sarvam_key:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "SARVAM_API_KEY and GEMINI_API_KEY must be set",
+            "SARVAM_API_KEY must be set (STT)",
+        )
+    if not groq_key and not gemini_key:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "GROQ_API_KEY or GEMINI_API_KEY must be set (LLM)",
         )
 
     http = httpx.AsyncClient(timeout=15.0)
@@ -394,10 +544,23 @@ def _build_deps_from_env() -> TurnDependencies:
         r2_reader = _NoOpR2()
         r2_writer = _NoOpR2()
 
+    if groq_key:
+        llm_adapter: Any = _GroqAdapter(
+            api_key=groq_key, model=groq_model, client=http,
+            gemini_key=gemini_key, gemini_model=gemini_model,
+        )
+    else:
+        llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
+
+    if cartesia_key:
+        tts_adapter: Any = _CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice=cartesia_voice)
+    else:
+        tts_adapter = _SarvamTTSAdapter(api_key=sarvam_key, client=http)
+
     return TurnDependencies(
         stt=_SarvamSTTAdapter(api_key=sarvam_key, client=http),
-        tts=_SarvamTTSAdapter(api_key=sarvam_key, client=http),
-        llm=_GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http),
+        tts=tts_adapter,
+        llm=llm_adapter,
         r2_reader=r2_reader,
         r2_writer=r2_writer,
     )
