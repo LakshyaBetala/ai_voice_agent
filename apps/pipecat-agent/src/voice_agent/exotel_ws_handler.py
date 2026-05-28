@@ -102,7 +102,10 @@ _last_pending_call_id: str | None = None
 #   - silence threshold met (low peak amplitude for `SILENCE_MS_THRESHOLD`)
 #   - hard buffer cap reached (avoids runaway when lead never pauses)
 
-SILENCE_MS_THRESHOLD = 700  # ms of quiet → assume utterance ended
+# ms of quiet → assume the lead finished talking. Higher = Priya waits longer
+# before replying (more polite, won't cut off a slow speaker) but adds that
+# much latency. 700 is snappy; 850-1000 feels more human on Indian calls.
+SILENCE_MS_THRESHOLD = int(os.environ.get("EXOTEL_SILENCE_MS", "750"))
 MAX_BUFFER_MS = 8000         # hard cap so STT call doesn't grow unbounded
 MIN_UTTERANCE_MS = 400       # noise floor — drop buffers shorter than this
 
