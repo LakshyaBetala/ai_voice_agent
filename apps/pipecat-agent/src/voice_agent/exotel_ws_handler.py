@@ -75,9 +75,18 @@ class _ActiveCall:
     slots: QualificationSlots
     deps: TurnDependencies
     db: AgentSupabaseClient | None = None
+    # Intro audio pre-synthesized at dial time (during the ring) so there is
+    # zero dead air after pickup — the gap the lead perceived as a spam "second
+    # ring". Falls back to live synth on connect if not ready in time.
+    intro_audio: bytes | None = None
+    intro_text: str | None = None
 
 
 _active_calls: dict[str, _ActiveCall] = {}
+
+# Strong refs to fire-and-forget background tasks (intro pre-synth) so the
+# event loop doesn't garbage-collect them before they finish.
+_bg_tasks: set = set()
 
 # call_id of the most recently triggered outbound call. Exotel's static
 # Voicebot applet URL means the WS arrives with no CustomField to match on,
@@ -104,6 +113,18 @@ EXOTEL_STREAM_SAMPLE_RATE = int(os.environ.get("EXOTEL_STREAM_SAMPLE_RATE", "800
 # Mirrors the local harness VAD (SILENCE_THRESHOLD=300).
 _PCM_SILENCE_THRESHOLD = 300
 
+# Barge-in: let the lead interrupt Priya mid-sentence. While she speaks we
+# normally stay half-duplex, but LOUD + SUSTAINED speech is treated as a real
+# interruption: flush her queued audio and start listening. The threshold sits
+# well above Priya's own (attenuated) echo, and the orchestrator's echo-overlap
+# guard is a second safety net so a false trigger degrades to "(silence)"
+# rather than derailing the call. Disable on an echoey line with EXOTEL_BARGE_IN=0.
+BARGE_IN_ENABLED = os.environ.get("EXOTEL_BARGE_IN", "1").strip().lower() not in (
+    "0", "false", "no", "",
+)
+_BARGE_IN_PCM_THRESHOLD = int(os.environ.get("EXOTEL_BARGE_IN_THRESHOLD", "2500"))
+BARGE_IN_MS = int(os.environ.get("EXOTEL_BARGE_IN_MS", "500"))
+
 
 def _is_silent_pcm(pcm: bytes, threshold: int = _PCM_SILENCE_THRESHOLD) -> bool:
     """Rough VAD on signed-16 little-endian PCM: peak below threshold = silent."""
@@ -114,6 +135,18 @@ def _is_silent_pcm(pcm: bytes, threshold: int = _PCM_SILENCE_THRESHOLD) -> bool:
     if not arr:
         return True
     return max(abs(s) for s in arr) < threshold
+
+
+def _is_loud_voiced(pcm: bytes, threshold: int = _BARGE_IN_PCM_THRESHOLD) -> bool:
+    """Peak at/above `threshold` = loud enough to be the lead interrupting
+    (not Priya's attenuated echo). Used only for barge-in detection."""
+    if len(pcm) < 2:
+        return False
+    arr = array.array("h")
+    arr.frombytes(pcm[: len(pcm) // 2 * 2])
+    if not arr:
+        return False
+    return max(abs(s) for s in arr) >= threshold
 
 
 def _chunk_ms(pcm: bytes, sample_rate: int) -> int:
@@ -149,19 +182,36 @@ async def _send_pcm_chunked(session: ExotelStreamSession, pcm: bytes) -> None:
         await session.send_audio(pcm[i : i + _OUT_FRAME_BYTES])
 
 
-async def _play_text(
-    session: ExotelStreamSession, active: "_ActiveCall", text: str
+async def _play_wav(
+    session: ExotelStreamSession, active: _ActiveCall, wav: bytes, text: str
 ) -> float:
-    """Synthesize `text`, stream it to the lead, record it as a Priya turn.
+    """Stream already-synthesized WAV to the lead, record it as a Priya turn.
     Returns the audio's playback duration in seconds (for the mute window)."""
+    pcm = tts_wav_to_exotel_pcm(wav, EXOTEL_STREAM_SAMPLE_RATE)
+    await _send_pcm_chunked(session, pcm)
+    if text.strip():
+        active.ctx.conversation_state.record_priya_turn(text)
+    return _audio_dur_sec(pcm, EXOTEL_STREAM_SAMPLE_RATE)
+
+
+async def _play_text(
+    session: ExotelStreamSession, active: _ActiveCall, text: str
+) -> float:
+    """Synthesize `text` live, then stream it. Slower path — prefer pre-synth."""
     if not text.strip():
         return 0.0
     lang = active.ctx.language_state.current.value
     wav = await active.deps.tts.synth(text, lang)
-    pcm = tts_wav_to_exotel_pcm(wav, EXOTEL_STREAM_SAMPLE_RATE)
-    await _send_pcm_chunked(session, pcm)
-    active.ctx.conversation_state.record_priya_turn(text)
-    return _audio_dur_sec(pcm, EXOTEL_STREAM_SAMPLE_RATE)
+    return await _play_wav(session, active, wav, text)
+
+
+async def _presynth_intro(active: _ActiveCall, text: str) -> None:
+    """Synthesize the intro during the ring so pickup has zero dead air."""
+    try:
+        lang = active.ctx.language_state.current.value
+        active.intro_audio = await active.deps.tts.synth(text, lang)
+    except Exception:
+        logger.exception("intro pre-synth failed; will synth live on connect")
 
 
 # -- Outbound trigger endpoint ---------------------------------------------
@@ -218,9 +268,20 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
         default_lang=req.lang_hint,
     )
     db = _build_db_client()
-    _active_calls[call_id] = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps, db=db)
+    active = _ActiveCall(ctx=ctx, slots=QualificationSlots(), deps=deps, db=db)
+    _active_calls[call_id] = active
     global _last_pending_call_id
     _last_pending_call_id = call_id
+
+    # Pre-synthesize the intro NOW, while the phone is still ringing, so the
+    # first word plays the instant the stream opens — no dead air the lead
+    # could mistake for a spam "second ring".
+    active.intro_text = build_intro_text(
+        lang=ctx.language_state.current.value, first_name=ctx.lead_first_name
+    )
+    _task = asyncio.create_task(_presynth_intro(active, active.intro_text))
+    _bg_tasks.add(_task)
+    _task.add_done_callback(_bg_tasks.discard)
 
     status_cb_base = os.environ.get("EXOTEL_STATUS_CALLBACK_URL", "").rstrip("/")
     status_callback = (
@@ -293,6 +354,7 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
     silence_ms = 0
     buffered_ms = 0
     voiced_ms = 0  # how much actual (non-silent) speech is in the buffer
+    barge_voiced_ms = 0  # loud speech heard *while Priya is talking* (barge-in)
     # Wall-clock time until which Priya is still speaking; ignore inbound
     # audio until then so she doesn't transcribe her own echo.
     speaking_until = 0.0
@@ -306,20 +368,29 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                     call_id, frame.stream_sid, frame.custom_field,
                 )
                 # Priya opens the call — greet first, then wait for the lead.
+                # Use the intro pre-synthesized at dial time (instant, no dead
+                # air); fall back to live synth only if it isn't ready yet.
                 try:
-                    intro = build_intro_text(
+                    intro = active.intro_text or build_intro_text(
                         lang=active.ctx.language_state.current.value,
                         first_name=active.ctx.lead_first_name,
                     )
-                    dur = await _play_text(session, active, intro)
+                    if active.intro_audio is not None:
+                        dur = await _play_wav(session, active, active.intro_audio, intro)
+                        source = "pre-synth"
+                    else:
+                        dur = await _play_text(session, active, intro)
+                        source = "live"
                     speaking_until = time.monotonic() + dur
                     logger.info(
-                        "call_id=%s intro played (%.1fs): %s", call_id, dur, intro[:60]
+                        "call_id=%s intro played (%s, %.1fs): %s",
+                        call_id, source, dur, intro[:60],
                     )
                 except Exception:
                     logger.exception("call_id=%s intro playback failed", call_id)
                 buffer.clear()
                 buffered_ms = silence_ms = voiced_ms = 0
+                barge_voiced_ms = 0
                 continue
             if isinstance(frame, StreamStopFrame):
                 logger.info("call_id=%s stopped: %s", call_id, frame.reason)
@@ -331,18 +402,38 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                 call_id, active = _resolve_active_call(call_id, None)
 
             chunk = frame.audio_bytes
+            chunk_ms = _chunk_ms(chunk, EXOTEL_STREAM_SAMPLE_RATE)
 
-            # Half-duplex: while Priya's reply is still playing (+ tail),
-            # ignore everything — it's her own voice echoing back.
-            if time.monotonic() < speaking_until + SPEAK_TAIL_SEC:
+            # While Priya's reply is still playing (+ a settle tail) we are
+            # half-duplex: most inbound audio is just her own echo. EXCEPT —
+            # if barge-in is on and we hear LOUD, SUSTAINED speech during her
+            # actual playback, treat it as the lead interrupting: flush her
+            # queued audio and start listening immediately.
+            now = time.monotonic()
+            if now < speaking_until + SPEAK_TAIL_SEC:
+                interrupted = False
+                if BARGE_IN_ENABLED and now < speaking_until:
+                    if _is_loud_voiced(chunk):
+                        barge_voiced_ms += chunk_ms
+                    else:
+                        barge_voiced_ms = 0  # must be *sustained* to count
+                    interrupted = barge_voiced_ms >= BARGE_IN_MS
+                if not interrupted:
+                    buffer.clear()
+                    buffered_ms = silence_ms = voiced_ms = 0
+                    if active.ctx.should_hard_stop():
+                        await session.send_clear()
+                        break
+                    continue
+                # Lead barged in — stop Priya now and capture their words.
+                await session.send_clear()
+                logger.info("call_id=%s barge-in — Priya yields to lead", call_id)
+                speaking_until = 0.0
+                barge_voiced_ms = 0
                 buffer.clear()
                 buffered_ms = silence_ms = voiced_ms = 0
-                if active.ctx.should_hard_stop():
-                    await session.send_clear()
-                    break
-                continue
+                # fall through: this chunk starts the lead's interrupting turn.
 
-            chunk_ms = _chunk_ms(chunk, EXOTEL_STREAM_SAMPLE_RATE)
             silent = _is_silent_pcm(chunk)
             if silent:
                 silence_ms += chunk_ms
@@ -428,6 +519,7 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             # chunk above) already keeps us deaf until her reply finishes.
             buffer.clear()
             buffered_ms = silence_ms = voiced_ms = 0
+            barge_voiced_ms = 0
 
             if turn_end_call:
                 # Let the goodbye line finish playing, then hang up by
@@ -535,6 +627,7 @@ def _build_deps_from_env() -> TurnDependencies:
         _NoOpR2,
         _SarvamSTTAdapter,
         _SarvamTTSAdapter,
+        _SmallestTTSAdapter,
     )
 
     sarvam_key = os.environ.get("SARVAM_API_KEY", "")
@@ -547,6 +640,10 @@ def _build_deps_from_env() -> TurnDependencies:
     eleven_key = os.environ.get("ELEVENLABS_API_KEY", "")
     eleven_voice = os.environ.get("ELEVENLABS_VOICE_ID", "")
     eleven_model = os.environ.get("ELEVENLABS_MODEL", "eleven_flash_v2_5")
+    smallest_key = os.environ.get("SMALLEST_API_KEY", "")
+    smallest_voice = os.environ.get("SMALLEST_VOICE", "meher")
+    smallest_model = os.environ.get("SMALLEST_MODEL", "lightning_v3.1_pro")
+    smallest_rate = int(os.environ.get("SMALLEST_SAMPLE_RATE", "16000"))
     if not sarvam_key:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -578,14 +675,21 @@ def _build_deps_from_env() -> TurnDependencies:
     else:
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
 
-    if eleven_key:
+    if smallest_key:
+        # smallest.ai Lightning v3.1 — one voice across hi/en/ta with native
+        # code-mixing + clean English-term pronunciation. Primary for all langs.
+        tts_adapter: Any = _SmallestTTSAdapter(
+            api_key=smallest_key, client=http, voice=smallest_voice,
+            model=smallest_model, sample_rate=smallest_rate,
+        )
+    elif eleven_key:
         el_adapter = _ElevenLabsTTSAdapter(
             api_key=eleven_key, client=http,
             voice_id=eleven_voice or "EXAVITQu4vr4xnSDxMaL", model=eleven_model,
         )
         if cartesia_key:
             # Hindi/English → ElevenLabs (realism); Tamil → Cartesia nithya.
-            tts_adapter: Any = _HybridTTSAdapter(
+            tts_adapter = _HybridTTSAdapter(
                 primary=el_adapter,
                 tamil=_CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice="nithya"),
             )

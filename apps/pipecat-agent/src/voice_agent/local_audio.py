@@ -44,6 +44,12 @@ from .sarvam_stt import STTResult, transcribe_batch
 from .sarvam_tts import synthesize as tts_synthesize
 from .cartesia_tts import synthesize as cartesia_synthesize
 from .elevenlabs_tts import synthesize as elevenlabs_synthesize
+from .smallest_tts import (
+    DEFAULT_MODEL as SMALLEST_DEFAULT_MODEL,
+    DEFAULT_SAMPLE_RATE as SMALLEST_DEFAULT_RATE,
+    DEFAULT_VOICE as SMALLEST_DEFAULT_VOICE,
+    synthesize as smallest_synthesize,
+)
 from .gemini_llm import generate as gemini_generate, stream_generate as gemini_stream
 from .groq_llm import generate as groq_generate, stream_generate as groq_stream
 from .streaming_orchestrator import (
@@ -96,6 +102,23 @@ class _CartesiaTTSAdapter:
         result = await cartesia_synthesize(
             text=text, lang=lang, api_key=self.api_key,
             voice=self.voice, client=self.client,
+        )
+        return result.audio
+
+
+@dataclass
+class _SmallestTTSAdapter:
+    api_key: str
+    client: httpx.AsyncClient
+    voice: str = SMALLEST_DEFAULT_VOICE
+    model: str = SMALLEST_DEFAULT_MODEL
+    sample_rate: int = SMALLEST_DEFAULT_RATE
+
+    async def synth(self, text: str, lang: str) -> bytes:
+        result = await smallest_synthesize(
+            text=text, lang=lang, api_key=self.api_key,
+            voice=self.voice, model=self.model,
+            sample_rate=self.sample_rate, client=self.client,
         )
         return result.audio
 
@@ -427,8 +450,12 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
     eleven_key = env.get("ELEVENLABS_API_KEY", "")
     eleven_voice = env.get("ELEVENLABS_VOICE_ID", "")
     eleven_model = env.get("ELEVENLABS_MODEL", "eleven_flash_v2_5")
-    if not sarvam_key and not cartesia_key:
-        raise SystemExit("SARVAM_API_KEY or CARTESIA_API_KEY must be set in .env")
+    smallest_key = env.get("SMALLEST_API_KEY", "")
+    smallest_voice = env.get("SMALLEST_VOICE", SMALLEST_DEFAULT_VOICE)
+    smallest_model = env.get("SMALLEST_MODEL", SMALLEST_DEFAULT_MODEL)
+    smallest_rate = int(env.get("SMALLEST_SAMPLE_RATE", str(SMALLEST_DEFAULT_RATE)))
+    if not sarvam_key and not cartesia_key and not smallest_key:
+        raise SystemExit("SARVAM_API_KEY, SMALLEST_API_KEY or CARTESIA_API_KEY must be set in .env")
     if not gemini_key and not groq_key:
         raise SystemExit("GEMINI_API_KEY or GROQ_API_KEY must be set in .env")
 
@@ -453,7 +480,14 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         print(f"[LLM: Gemini {gemini_model}]")
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
 
-    if eleven_key:
+    if smallest_key:
+        print(f"[TTS: smallest.ai {smallest_model} voice={smallest_voice} "
+              f"@ {smallest_rate}Hz (hi/en/ta, one voice)]")
+        tts_adapter = _SmallestTTSAdapter(
+            api_key=smallest_key, client=http, voice=smallest_voice,
+            model=smallest_model, sample_rate=smallest_rate,
+        )
+    elif eleven_key:
         if not eleven_voice:
             print("[warn] ELEVENLABS_VOICE_ID unset — using default (US accent). "
                   "Set an Indian Hindi female voice_id for natural Hindi.")

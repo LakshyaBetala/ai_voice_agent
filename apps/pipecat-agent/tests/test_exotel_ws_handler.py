@@ -236,6 +236,30 @@ def test_trigger_outbound_call_calls_exotel_and_registers_context(monkeypatch, a
     assert "lead-42" in exotel_ws_handler._active_calls
 
 
+# -- Barge-in detection ----------------------------------------------------
+
+def test_is_loud_voiced_distinguishes_lead_speech_from_silence():
+    """Loud sustained speech crosses the barge-in threshold; quiet echo doesn't."""
+    loud = bytes([0x40, 0xC0] * 800)   # 0xC040 = -16320 peak
+    quiet = bytes([0x10, 0x00] * 800)  # 0x0010 = 16 peak → below threshold
+    silent = bytes(1600)
+    assert exotel_ws_handler._is_loud_voiced(loud) is True
+    assert exotel_ws_handler._is_loud_voiced(quiet) is False
+    assert exotel_ws_handler._is_loud_voiced(silent) is False
+
+
+def test_is_loud_voiced_respects_custom_threshold():
+    mid = bytes([0xD0, 0x07] * 800)  # 0x07D0 = 2000 peak
+    assert exotel_ws_handler._is_loud_voiced(mid, threshold=1500) is True
+    assert exotel_ws_handler._is_loud_voiced(mid, threshold=3000) is False
+
+
+def test_barge_in_config_defaults_are_sane():
+    """Barge-in on by default, threshold well above the silence floor."""
+    assert exotel_ws_handler.BARGE_IN_MS > 0
+    assert exotel_ws_handler._BARGE_IN_PCM_THRESHOLD > exotel_ws_handler._PCM_SILENCE_THRESHOLD
+
+
 def test_trigger_outbound_call_bubbles_exotel_error_as_502(monkeypatch, app_with_fakes):
     monkeypatch.setenv("EXOTEL_SID", "almmatix1")
     monkeypatch.setenv("EXOTEL_API_KEY", "k")
