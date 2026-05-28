@@ -193,6 +193,10 @@ async def run_turn_streaming(
         ctx.conversation_state.reject_count += 1
     elif intent == "offtopic":
         ctx.conversation_state.off_topic_count += 1
+    elif intent == "backchannel":
+        ctx.conversation_state.backchannel_count += 1
+    elif intent == "normal":
+        ctx.conversation_state.backchannel_count = 0
     end_call = should_end_call(intent, ctx.conversation_state)
 
     user_msg = _format_user_message(
@@ -414,15 +418,48 @@ _ABUSE_WORDS = [
 ]
 
 
+# Pure acknowledgment tokens — the lead is listening, not answering.
+_BACKCHANNEL_TOKENS: frozenset[str] = frozenset({
+    "acha", "achha", "accha", "achchha", "haan", "han", "haa", "hmm", "hm",
+    "mm", "mmm", "ok", "okay", "okk", "theek", "thik", "sahi", "right",
+    "ji", "sari", "seri", "aama", "yes", "yeah", "yep", "bilkul", "sun",
+    "suno", "hmmm", "achaa",
+})
+# Harmless connectors allowed alongside an ack without changing the meaning
+# ("theek hai", "haan ji", "haan boliye", "ok sir").
+_BACKCHANNEL_CONNECTORS: frozenset[str] = frozenset({
+    "hai", "ji", "haan", "na", "to", "sir", "madam", "boliye", "bolo",
+    "kahiye", "batao", "bataiye",
+})
+
+
+def _is_backchannel(text: str) -> bool:
+    """True when a SHORT utterance is only acknowledgment ("acha", "haan haan",
+    "theek hai", "ok ji") — the lead is passively listening, not answering and
+    not asking to close. Anything with real content (e.g. "theek hai bhej do")
+    is NOT a backchannel."""
+    cleaned = re.sub(r"[^\w\s]", " ", text.lower()).strip()
+    words = cleaned.split()
+    if not words or len(words) > 4:
+        return False
+    if not all(w in _BACKCHANNEL_TOKENS or w in _BACKCHANNEL_CONNECTORS for w in words):
+        return False
+    return any(w in _BACKCHANNEL_TOKENS for w in words)
+
+
 def classify_lead_intent(lead_text: str, conv) -> str:
     """Coarse intent for end-of-call decisions. One of:
-    silence | close | reject | wrong | abuse | offtopic | normal.
+    silence | backchannel | close | reject | wrong | abuse | offtopic | normal.
     """
     t = lead_text.lower().strip()
     if not t or "silence" in t:
         return "silence"
     if any(w in t for w in _ABUSE_WORDS):
         return "abuse"
+    # Check backchannel BEFORE close: a lone "theek hai"/"ok"/"acha" is the lead
+    # listening, NOT asking to end the call. (Bug fix: these used to hang up.)
+    if _is_backchannel(t):
+        return "backchannel"
     if any(w in t for w in _CLOSE_WORDS):
         return "close"
     if any(w in t for w in _OFFTOPIC_WORDS):
@@ -472,6 +509,22 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN", intent:
         return "\n".join(parts)
 
     parts.append(f'Lead: "{lead_text}"')
+
+    if intent == "backchannel":
+        if conv.backchannel_count >= 2:
+            parts.append(
+                'Lead is just listening passively (only said "' + lead_text.strip()
+                + '"), not answering. STOP explaining. Ask ONE short, direct question to '
+                'pull them in — e.g. abhi kaunsa chemical use karte hain, ya monthly kitna '
+                'volume lagta hai. Do NOT repeat your previous question.'
+            )
+        else:
+            parts.append(
+                'Lead is acknowledging (listening), NOT answering and NOT closing. '
+                'Do NOT repeat your last question. Move FORWARD: add ONE new useful point '
+                'or ask the NEXT short question.'
+            )
+        return "\n".join(parts)
 
     if intent == "close":
         parts.append('Lead wants to CLOSE. Say ONLY: "Bilkul sir, isi number pe WhatsApp pe quote aa jayega. Thank you!" Then STOP.')

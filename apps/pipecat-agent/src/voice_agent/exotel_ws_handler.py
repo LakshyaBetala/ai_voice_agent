@@ -645,6 +645,7 @@ def _build_deps_from_env() -> TurnDependencies:
     smallest_model = os.environ.get("SMALLEST_MODEL", "lightning_v3.1_pro")
     smallest_rate = int(os.environ.get("SMALLEST_SAMPLE_RATE", "16000"))
     smallest_speed = float(os.environ.get("SMALLEST_SPEED", "1.0"))
+    smallest_lang_hint = os.environ.get("SMALLEST_LANG_HINT", "tamil_only")
     if not sarvam_key:
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -669,9 +670,12 @@ def _build_deps_from_env() -> TurnDependencies:
         r2_writer = _NoOpR2()
 
     if groq_key:
+        # Slot extraction runs on every turn. Gemini's free tier 429s under
+        # live-call rate, so when Groq is available we extract with Groq too
+        # (fast, reliable) by NOT handing the adapter a Gemini key.
         llm_adapter: Any = _GroqAdapter(
             api_key=groq_key, model=groq_model, client=http,
-            gemini_key=gemini_key, gemini_model=gemini_model,
+            gemini_key="", gemini_model=gemini_model,
         )
     else:
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
@@ -682,6 +686,7 @@ def _build_deps_from_env() -> TurnDependencies:
         tts_adapter: Any = _SmallestTTSAdapter(
             api_key=smallest_key, client=http, voice=smallest_voice,
             model=smallest_model, sample_rate=smallest_rate, speed=smallest_speed,
+            lang_hint=smallest_lang_hint,
         )
     elif eleven_key:
         el_adapter = _ElevenLabsTTSAdapter(

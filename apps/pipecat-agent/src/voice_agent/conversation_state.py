@@ -98,6 +98,11 @@ class ConversationState:
     # second → warm goodbye + hang up. ("Try our best, then stop.")
     reject_count: int = 0
 
+    # Consecutive "passive listener" turns — lead only acknowledges ("acha",
+    # "haan", "hmm") without answering. After a couple of these Priya stops
+    # explaining and asks a short, direct question to pull them in.
+    backchannel_count: int = 0
+
     # Phase entry timestamps for telemetry + debugging.
     phase_entered_at: dict[Phase, float] = field(default_factory=dict)
 

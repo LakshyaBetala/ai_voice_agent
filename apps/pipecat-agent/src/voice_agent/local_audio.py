@@ -114,12 +114,25 @@ class _SmallestTTSAdapter:
     model: str = SMALLEST_DEFAULT_MODEL
     sample_rate: int = SMALLEST_DEFAULT_RATE
     speed: float = 1.0
+    # When to send the language hint: "tamil_only" (default) lets Lightning
+    # auto-detect for hi/en so embedded English words + numbers are pronounced
+    # naturally (code-mixing), but pins Tamil so romanized Tanglish isn't read
+    # as English. "always" forces the hint; "never" always auto-detects.
+    lang_hint: str = "tamil_only"
+
+    def _send_language(self, lang: str) -> bool:
+        if self.lang_hint == "always":
+            return True
+        if self.lang_hint == "never":
+            return False
+        return (lang or "").lower().startswith("ta")
 
     async def synth(self, text: str, lang: str) -> bytes:
         result = await smallest_synthesize(
             text=text, lang=lang, api_key=self.api_key,
             voice=self.voice, model=self.model,
-            sample_rate=self.sample_rate, speed=self.speed, client=self.client,
+            sample_rate=self.sample_rate, speed=self.speed,
+            send_language=self._send_language(lang), client=self.client,
         )
         return result.audio
 
@@ -456,6 +469,7 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
     smallest_model = env.get("SMALLEST_MODEL", SMALLEST_DEFAULT_MODEL)
     smallest_rate = int(env.get("SMALLEST_SAMPLE_RATE", str(SMALLEST_DEFAULT_RATE)))
     smallest_speed = float(env.get("SMALLEST_SPEED", "1.0"))
+    smallest_lang_hint = env.get("SMALLEST_LANG_HINT", "tamil_only")
     if not sarvam_key and not cartesia_key and not smallest_key:
         raise SystemExit("SARVAM_API_KEY, SMALLEST_API_KEY or CARTESIA_API_KEY must be set in .env")
     if not gemini_key and not groq_key:
@@ -473,10 +487,11 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         r2_writer = _NoOpR2()
 
     if groq_key:
-        print(f"[LLM: Groq {groq_model}]")
+        print(f"[LLM: Groq {groq_model}  (extraction: Groq)]")
+        # Extract with Groq too — Gemini free tier 429s under live-call rate.
         llm_adapter = _GroqAdapter(
             api_key=groq_key, model=groq_model, client=http,
-            gemini_key=gemini_key, gemini_model=gemini_model,
+            gemini_key="", gemini_model=gemini_model,
         )
     else:
         print(f"[LLM: Gemini {gemini_model}]")
@@ -488,6 +503,7 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         tts_adapter = _SmallestTTSAdapter(
             api_key=smallest_key, client=http, voice=smallest_voice,
             model=smallest_model, sample_rate=smallest_rate, speed=smallest_speed,
+            lang_hint=smallest_lang_hint,
         )
     elif eleven_key:
         if not eleven_voice:
