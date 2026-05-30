@@ -62,25 +62,30 @@ class TestLowConfidenceIgnored:
 
 
 # ---------------------------------------------------------------------------
-# Hysteresis: 1 full utterance flips (lowered for faster switching).
+# Hysteresis: 2 full utterances flip (stickier — single misdetect can't drift).
+# Marker-token overrides bypass hysteresis when morphology is unambiguous.
 # ---------------------------------------------------------------------------
 
 class TestHysteresisFlip:
-    def test_one_full_hindi_utterance_flips_from_english(self):
+    def test_two_full_hindi_utterances_flip_from_english(self):
         state = LanguageState.initial(Lang.EN)
         t1 = state.update(utt("haan main Sunil bol raha hoon Brilliant Paints se", Lang.HI))
-        assert t1.switched is True
-        assert t1.trigger == "hysteresis"
+        assert t1.switched is False  # first full utterance just pends
+        t2 = state.update(utt("hum bulk mein chemicals lete hain pharma ke liye", Lang.HI))
+        assert t2.switched is True
+        assert t2.trigger == "hysteresis"
         assert state.current == Lang.HI
 
     def test_bridge_phrase_en_to_hi(self):
         state = LanguageState.initial(Lang.EN)
-        t = state.update(utt("hum naya supplier dhoond rahe hain", Lang.HI))
+        state.update(utt("hum naya supplier dhoond rahe hain", Lang.HI))
+        t = state.update(utt("paint manufacturing karte hain hum log", Lang.HI))
         assert t.bridge_phrase == "Bilkul, Hindi mein baat karte hain."
 
     def test_bridge_phrase_hi_to_en(self):
         state = LanguageState.initial(Lang.HI)
-        t = state.update(utt("we are looking for new suppliers actually", Lang.EN))
+        state.update(utt("we are looking for new suppliers actually", Lang.EN))
+        t = state.update(utt("can you share the pricing details please", Lang.EN))
         assert t.bridge_phrase == "Sure, let's talk in English."
 
     def test_alternating_short_utterances_never_flip(self):
@@ -94,7 +99,9 @@ class TestHysteresisFlip:
     def test_pending_resets_when_lead_returns_to_current(self):
         state = LanguageState.initial(Lang.EN)
         state.update(utt("haan main Sunil bol raha hoon", Lang.HI))
-        assert state.current == Lang.HI  # flips immediately with hysteresis=1
+        assert state.current == Lang.EN  # 1 full utterance pends but doesn't flip
+        state.update(utt("yes I work in procurement here", Lang.EN))
+        assert state.current == Lang.EN  # returning to EN resets pending
 
 
 # ---------------------------------------------------------------------------
@@ -142,12 +149,17 @@ class TestCodeMixedNoFlip:
         assert t.switched is False
         assert state.current == Lang.EN
 
-    def test_tanglish_keeps_current_language(self):
+    def test_tanglish_with_clear_markers_does_flip(self):
+        """When STT flags code-mixed but the text has unambiguous Tamil
+        morphology ("naan"), the marker override wins — we WANT to flip so
+        Priya mirrors the lead. Matches the product requirement: 'if it
+        switched in tamil and the client continues in tamil let it be tamil'."""
         state = LanguageState.initial(Lang.EN)
         t = state.update(
-            utt("naan procurement parppen but pricing seri illa", Lang.TA, code_mixed=True)
+            utt("naan procurement head parppen pricing details venum", Lang.TA, code_mixed=True)
         )
-        assert t.switched is False
+        assert t.switched is True
+        assert state.current == Lang.TA
 
 
 # ---------------------------------------------------------------------------
@@ -156,11 +168,14 @@ class TestCodeMixedNoFlip:
 
 class TestRealisticFlows:
     def test_call_starts_english_drifts_hindi_correctly(self):
-        """Lead picks up in English, then moves to Hindi. Flips on first full Hindi utterance."""
+        """Lead picks up in English, then moves to Hindi. Hysteresis=2 means
+        two full Hindi utterances are required."""
         state = LanguageState.initial(Lang.EN)
         state.update(utt("yes hello", Lang.EN))  # short, no effect
-        t = state.update(utt("ji main Sunil bol raha hoon", Lang.HI))
-        assert t.switched is True
+        t1 = state.update(utt("ji main Sunil bol raha hoon", Lang.HI))
+        assert t1.switched is False  # first full pending
+        t2 = state.update(utt("paint manufacturing karte hain hum", Lang.HI))
+        assert t2.switched is True
         assert state.current == Lang.HI
 
     def test_call_stays_english_when_lead_only_dropped_filler_words(self):
@@ -179,12 +194,17 @@ class TestRealisticFlows:
         assert state.current == Lang.EN
 
     def test_double_switch_en_to_hi_to_ta(self):
-        """Lead switches twice in a call (rare but real)."""
+        """Lead switches twice in a call (rare but real).
+
+        Tamil flips fast here because the second utterance has Tamil markers
+        ('pesunga', 'naan') that trigger the marker-override path.
+        """
         state = LanguageState.initial(Lang.EN)
-        # Flip to Hindi — single full utterance now flips
-        t1 = state.update(utt("hum bulk mein kharidte hain", Lang.HI))
+        # Flip to Hindi — needs two full Hindi utterances.
+        state.update(utt("hum bulk mein kharidte hain", Lang.HI))
+        t1 = state.update(utt("pharma chemicals chahiye monthly basis pe", Lang.HI))
         assert t1.switched and state.current == Lang.HI
-        # Flip to Tamil
+        # Tamil markers ("pesunga") trigger override → instant flip even with hysteresis=2.
         t2 = state.update(utt("naan finance head dhaan procurement head Ramesh-kitta pesunga", Lang.TA))
         assert t2.switched and state.current == Lang.TA
 

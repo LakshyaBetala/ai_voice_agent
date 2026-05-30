@@ -35,6 +35,7 @@ secrets/
 pnpm-debug.log*
 npm-debug.log*
 yarn-debug.log*
+call-logs.txt
 
 # OS junk
 .DS_Store

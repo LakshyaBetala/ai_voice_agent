@@ -41,12 +41,67 @@ class Lang(str, Enum):
 MIN_LANG_CONFIDENCE: float = 0.75
 
 # Number of consecutive same-language full utterances required to flip.
-# Set to 2: a single drift word ("haan", "okay") never flips state.
-SWITCH_HYSTERESIS: int = 1
+# Set to 2: once we're in a language, a single stray utterance in another
+# tongue (often a misdetect of code-mix or a loanword-heavy Tamil reply
+# tagged hi-IN) shouldn't flip us back. Real switches show up across two
+# full turns anyway. Marker-overrides bypass this when morphology is clear.
+SWITCH_HYSTERESIS: int = 2
 
 # Word count above which an utterance counts as "full" for hysteresis.
 # 3+ words means the lead said more than a backchannel acknowledgement.
 FULL_UTTERANCE_MIN_WORDS: int = 3
+
+
+# Strong language-marker words. When Sarvam mis-tags a Tamil-heavy utterance
+# as Hindi (or vice versa), these tokens override the STT tag. Pattern-matched
+# as whole words, lowercase. Keep highly distinctive — common cross-language
+# words (haan, ji, ok) do NOT belong here.
+_TAMIL_MARKERS: frozenset[str] = frozenset({
+    "irukku", "irukka", "irukken", "panren", "pannuren", "pannunga",
+    "tharen", "tharaen", "tharudhu", "vaanga", "varum", "varudhu",
+    "puriyala", "puriyalai", "puriyutha", "kekkala", "sariya",
+    "epdi", "yepdi", "enna", "evvalavu", "anuppu", "anuppunga",
+    "paesalama", "paesalaam", "ungalukku", "engaluku", "athunaala",
+    "kandippa", "paathaachu", "paathuren", "paarunga", "paarungalen",
+    "thirumba", "sollunga", "sonnel", "sonninga", "sonneenga",
+    "venum", "venam", "naan", "naangal", "pesunga", "pesungo",
+    "kitta", "dhaan", "iduku", "aduku", "enakku", "yenakku",
+    "panreen", "panneenga", "pannittu", "vechu", "kondu", "ille",
+    "illa-nu", "solren", "sonnen",
+})
+_HINDI_MARKERS: frozenset[str] = frozenset({
+    "bilkul", "kijiye", "dijiye", "karenge", "karenga", "karungi",
+    "achha", "accha", "matlab", "isiliye", "kyunki", "lekin", "magar",
+    "bhaiya", "behen", "sahab", "saab", "bataiye", "bataye", "boliye",
+    "dekhiye", "samjhaiye", "samjhaye", "kahiye", "rahiye", "jaiye",
+    "aaiye", "padhiye", "lijiye", "leejiye", "bhejiye", "bhej",
+})
+
+
+# Minimum word count before a marker is allowed to flip language. A lone
+# "sari" or "achha" is a backchannel ack, not a language signal.
+_MARKER_MIN_WORDS: int = 3
+
+
+def _marker_override(text: str) -> Lang | None:
+    """Whole-word marker scan that overrides Sarvam's STT lang tag.
+
+    A genuine Tamil utterance with Hindi-loanwords ("haan rate-uh sollunga
+    sir") can come back tagged hi-IN. The presence of Tamil-distinctive
+    morphology ("sollunga") should pull us back. Returns the overridden
+    language if exactly one side has markers AND the utterance has enough
+    surrounding words to be a real sentence (not a one-word ack).
+    """
+    words = re.findall(r"[a-z]+", text.lower())
+    if len(words) < _MARKER_MIN_WORDS:
+        return None
+    ta = any(w in _TAMIL_MARKERS for w in words)
+    hi = any(w in _HINDI_MARKERS for w in words)
+    if ta and not hi:
+        return Lang.TA
+    if hi and not ta:
+        return Lang.HI
+    return None
 
 
 # Explicit "switch language now" trigger phrases. These bypass hysteresis.
@@ -153,8 +208,29 @@ class LanguageState:
         if trigger_lang and trigger_lang != self.current:
             return self._flip(trigger_lang, "explicit")
 
+        # Marker-token override: if morphology unambiguously identifies a
+        # language (e.g. "pesunga"/"irukku" = Tamil, "kijiye"/"bilkul" = Hindi),
+        # bypass hysteresis and flip immediately. Markers are high-precision
+        # so we trust them more than Sarvam's lang tag. This is what protects
+        # a Tamil-with-loanwords reply from being mis-tagged hi-IN and
+        # flipping us back. Gated by STT confidence — at low conf the text
+        # itself can be a hallucination, so don't trust marker words inside.
+        marker = (
+            _marker_override(utt.text)
+            if utt.confidence >= MIN_LANG_CONFIDENCE
+            else None
+        )
+        if marker is not None and marker != self.current:
+            return self._flip(marker, "explicit")
+        if marker is not None:
+            self.pending_lang = None
+            self.pending_count = 0
+            return Transition(self.current, False, "none", None)
+
+        effective_lang = utt.lang
+
         # Rule 1: low STT confidence → ignore detection.
-        if utt.confidence < MIN_LANG_CONFIDENCE or utt.lang is None:
+        if utt.confidence < MIN_LANG_CONFIDENCE or effective_lang is None:
             return Transition(self.current, False, "none", None)
 
         # Rule 4: code-mixed → don't change state, just keep dominant.
@@ -162,7 +238,7 @@ class LanguageState:
             return Transition(self.current, False, "none", None)
 
         # Already in detected language → reset any pending counter.
-        if utt.lang == self.current:
+        if effective_lang == self.current:
             self.pending_lang = None
             self.pending_count = 0
             return Transition(self.current, False, "none", None)
@@ -173,14 +249,14 @@ class LanguageState:
             # Short utterance in a new language — don't count toward switch.
             return Transition(self.current, False, "none", None)
 
-        if self.pending_lang == utt.lang:
+        if self.pending_lang == effective_lang:
             self.pending_count += 1
         else:
-            self.pending_lang = utt.lang
+            self.pending_lang = effective_lang
             self.pending_count = 1
 
         if self.pending_count >= SWITCH_HYSTERESIS:
-            return self._flip(utt.lang, "hysteresis")
+            return self._flip(effective_lang, "hysteresis")
 
         return Transition(self.current, False, "none", None)
 

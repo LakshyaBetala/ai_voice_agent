@@ -1,9 +1,11 @@
+import { redirect } from "next/navigation";
 import { signInAction } from "./actions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
 export default function LoginPage() {
+  if (process.env.DEV_BYPASS_AUTH === "1") redirect("/leads");
   return (
     <main className="mx-auto mt-24 max-w-sm space-y-6 p-6">
       <div>

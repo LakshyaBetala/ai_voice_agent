@@ -418,6 +418,26 @@ _ABUSE_WORDS = [
     "chutiya", "bhosdi", "madarchod", "behenchod", "gaand", "lavda",
     "randi", "harami", "kutte", "saala kutta", "fuck", "bastard",
 ]
+# Lead didn't catch what Priya said — she should REPHRASE, not parrot.
+# Covers Hindi, Tamil, English, and code-mix re-ask phrases. Checked BEFORE
+# close/normal so a clarification request never gets read as agreement.
+_CLARIFY_WORDS = [
+    # English
+    "didn't get", "didnt get", "did not get", "couldn't hear", "couldnt hear",
+    "could not hear", "say again", "come again", "what was that", "what did you say",
+    "pardon", "repeat please", "please repeat", "one more time", "again sir",
+    "sorry sir", "sorry didn't", "sorry didnt",
+    # Hindi
+    "phir se", "phir bolo", "phir boliye", "dobara", "dubara", "kya bola",
+    "kya kaha", "kya kaha sir", "samajh nahi", "samjha nahi", "samjhi nahi",
+    "nahi suna", "nahi sunai", "suna nahi", "sunai nahi",
+    "thoda dheere", "dheere boliye", "aaram se boliye",
+    # Tamil / Tanglish
+    "enna sonninga", "enna sonneenga", "enna sonneenge", "enna sonnel",
+    "puriyala", "puriyalai", "puriyale", "kekkala", "kekkalai",
+    "thirumba sollunga", "thirumba sollu", "innum oru thadava",
+    "konjam meadhu", "meadhu sollunga", "slow ah sollunga",
+]
 
 
 # Pure acknowledgment tokens — the lead is listening, not answering.
@@ -462,6 +482,11 @@ def classify_lead_intent(lead_text: str, conv) -> str:
     # listening, NOT asking to end the call. (Bug fix: these used to hang up.)
     if _is_backchannel(t):
         return "backchannel"
+    # Check clarify BEFORE close: "thoda dheere boliye" contains "boliye" which
+    # otherwise reads like a quote-send cue; same for re-ask phrases that touch
+    # close keywords by accident.
+    if any(w in t for w in _CLARIFY_WORDS):
+        return "clarify"
     if any(w in t for w in _CLOSE_WORDS):
         return "close"
     if any(w in t for w in _OFFTOPIC_WORDS):
@@ -499,12 +524,33 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN", intent:
     if turn == 0:
         parts.append('[Intro DONE. Do not introduce yourself.]')
 
+    last_priya = conv.recent_priya_turns[-1] if conv.recent_priya_turns else ""
     if lang == "ta-IN":
-        parts.append('[TANGLISH. Zero Hindi.]')
+        # Strong pin: examples in the system prompt skew Hindi, so the LLM
+        # tends to drift back. Anchor the LLM to its last Tamil turn and
+        # explicitly forbid Hindi-only words.
+        parts.append(
+            '[TANGLISH ONLY. Tamil grammar + English business words. '
+            'ZERO Hindi words — no "achha", "bilkul", "haan ji", "theek hai", '
+            '"karenge", "kijiye", "dijiye", "boliye", "bataiye". '
+            'Use sarr/sariya/iruku/thaaren/panren/paesalaam/paathaachu. '
+            'Open ONLY with "Vanakkam sarr" or "Hello sarr" — never "Vaango sarr" '
+            'on an outbound call (vaango = "welcome in"; wrong context). '
+            'You spoke Tamil last turn — stay in Tamil unless lead asks otherwise.]'
+        )
+        if last_priya:
+            parts.append(f'[Your last reply (Tamil): "{last_priya}"]')
     elif lang == "en-IN":
-        parts.append('[ENGLISH]')
+        parts.append('[ENGLISH. Indian-cadence English only — no Hindi, no Tamil.]')
+        if last_priya:
+            parts.append(f'[Your last reply (English): "{last_priya}"]')
     else:
-        parts.append('[HINGLISH]')
+        parts.append(
+            '[HINGLISH. Hindi grammar + English business words. '
+            'No Tamil grammar (no "irukku", "tharen", "panren", "sariya").]'
+        )
+        if last_priya:
+            parts.append(f'[Your last reply (Hindi): "{last_priya}"]')
 
     if is_silence:
         parts.append('Lead silent. Ask once gently: "Sir, sun pa rahe hain?"')
@@ -526,6 +572,20 @@ def _format_user_message(lead_text, slots, conv, *, lang: str = "hi-IN", intent:
                 'Do NOT repeat your last question. Move FORWARD: add ONE new useful point '
                 'or ask the NEXT short question.'
             )
+        return "\n".join(parts)
+
+    if intent == "clarify":
+        last_priya = conv.recent_priya_turns[-1] if conv.recent_priya_turns else ""
+        parts.append(
+            f'Lead did NOT catch you (said "{lead_text.strip()}"). '
+            f'Your last line was: "{last_priya}". '
+            'REPHRASE that idea — DO NOT repeat it verbatim. '
+            'Use simpler/shorter words, add a "..." pause, spell tricky terms '
+            'phonetically (kemicals, eth-a-naal, kot, price-uh, raate-uh). '
+            'Drop one detail if packed. Stay in the SAME language the lead used. '
+            'One short sentence, then a question if natural. NEVER copy your '
+            'previous sentence word-for-word.'
+        )
         return "\n".join(parts)
 
     if intent == "close":

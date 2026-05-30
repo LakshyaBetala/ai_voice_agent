@@ -183,13 +183,24 @@ def apply_gain(pcm: bytes, gain: float) -> bytes:
     return arr.tobytes()
 
 
-def tts_wav_to_exotel_pcm(wav_bytes: bytes, target_rate: int, gain: float = 1.0) -> bytes:
+def tts_wav_to_exotel_pcm(
+    wav_bytes: bytes, target_rate: int, gain: float = 1.0, lead_silence_ms: int = 0,
+) -> bytes:
     """TTS WAV (Cartesia 16 kHz or Sarvam 8/16 kHz) → raw PCM at Exotel's rate.
 
     Returns headerless signed-16 little-endian PCM, resampled to
     `target_rate` (the rate the Voicebot applet is configured for), optionally
     amplified by `gain` so Priya isn't faint on the phone.
+
+    `lead_silence_ms` prepends silent PCM so the cellular channel has time to
+    stabilize before the first syllable. Without this, the start of words like
+    "Vanakkam" can clip on connection setup. ~30-60ms is imperceptible to the
+    listener but recovers the lost articulation.
     """
     pcm, sr = wav_to_pcm16(wav_bytes)
     resampled = pcm16_resample(pcm, sr, target_rate)
-    return apply_gain(resampled, gain)
+    amplified = apply_gain(resampled, gain)
+    if lead_silence_ms > 0:
+        pad_samples = int(target_rate * lead_silence_ms / 1000)
+        return bytes(pad_samples * 2) + amplified
+    return amplified

@@ -144,6 +144,11 @@ EXOTEL_STREAM_SAMPLE_RATE = int(os.environ.get("EXOTEL_STREAM_SAMPLE_RATE", "800
 # faint on a phone earpiece. 1.0 = off; 1.4-1.8 lifts her; >2 risks clipping.
 EXOTEL_TTS_GAIN = float(os.environ.get("EXOTEL_TTS_GAIN", "1.0"))
 
+# Silent PCM prepended to every TTS chunk so the cellular channel can stabilize
+# before the first syllable. Without this, words like "Vanakkam" can lose their
+# leading "Va-" on the line. 30-60ms is imperceptible to the listener.
+EXOTEL_LEAD_SILENCE_MS = int(os.environ.get("EXOTEL_LEAD_SILENCE_MS", "50"))
+
 # Peak-amplitude threshold below which a raw-PCM chunk counts as "silent".
 # Mirrors the local harness VAD (SILENCE_THRESHOLD=300).
 _PCM_SILENCE_THRESHOLD = 300
@@ -222,7 +227,10 @@ async def _play_wav(
 ) -> float:
     """Stream already-synthesized WAV to the lead, record it as a Priya turn.
     Returns the audio's playback duration in seconds (for the mute window)."""
-    pcm = tts_wav_to_exotel_pcm(wav, EXOTEL_STREAM_SAMPLE_RATE, gain=EXOTEL_TTS_GAIN)
+    pcm = tts_wav_to_exotel_pcm(
+        wav, EXOTEL_STREAM_SAMPLE_RATE,
+        gain=EXOTEL_TTS_GAIN, lead_silence_ms=EXOTEL_LEAD_SILENCE_MS,
+    )
     await _send_pcm_chunked(session, pcm)
     if text.strip():
         active.ctx.conversation_state.record_priya_turn(text)
@@ -513,6 +521,7 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             )
 
             turn_end_call = False
+            first_chunk_of_turn = True
             try:
                 async for event in run_turn_streaming(
                     ctx=active.ctx,
@@ -522,9 +531,14 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
                 ):
                     if isinstance(event, AudioChunkEvent):
                         try:
+                            # Only pad the FIRST sentence of a turn — between
+                            # sentences the channel is already stable and a pad
+                            # per sentence would compound noticeable delay.
+                            pad_ms = EXOTEL_LEAD_SILENCE_MS if first_chunk_of_turn else 0
+                            first_chunk_of_turn = False
                             out_pcm = tts_wav_to_exotel_pcm(
                                 event.audio, EXOTEL_STREAM_SAMPLE_RATE,
-                                gain=EXOTEL_TTS_GAIN,
+                                gain=EXOTEL_TTS_GAIN, lead_silence_ms=pad_ms,
                             )
                             await _send_pcm_chunked(session, out_pcm)
                             speaking_until = (
