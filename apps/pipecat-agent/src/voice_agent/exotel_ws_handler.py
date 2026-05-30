@@ -761,12 +761,34 @@ def _build_deps_from_env() -> TurnDependencies:
 
     if smallest_key:
         # smallest.ai Lightning v3.1 — one voice across hi/en/ta with native
-        # code-mixing + clean English-term pronunciation. Primary for all langs.
-        tts_adapter: Any = _SmallestTTSAdapter(
+        # code-mixing + clean English-term pronunciation.
+        smallest_adapter = _SmallestTTSAdapter(
             api_key=smallest_key, client=http, voice=smallest_voice,
             model=smallest_model, sample_rate=smallest_rate, speed=smallest_speed,
             lang_hint=smallest_lang_hint,
         )
+        # Tamil rendering on meher is the worst pronunciation in the stack —
+        # native TN listeners report it as incomprehensible. Sarvam bulbul:v3
+        # is Indic-native and produces a far better Tamil voice. Route ta-IN
+        # to a dedicated provider; fall back to smallest only if neither
+        # Sarvam nor Cartesia is configured.
+        tamil_provider = os.environ.get(
+            "SMALLEST_TAMIL_PROVIDER", "sarvam"
+        ).strip().lower()
+        if tamil_provider == "sarvam" and sarvam_key:
+            tts_adapter: Any = _HybridTTSAdapter(
+                primary=smallest_adapter,
+                tamil=_SarvamTTSAdapter(api_key=sarvam_key, client=http),
+            )
+        elif tamil_provider == "cartesia" and cartesia_key:
+            tts_adapter = _HybridTTSAdapter(
+                primary=smallest_adapter,
+                tamil=_CartesiaTTSAdapter(
+                    api_key=cartesia_key, client=http, voice="nithya",
+                ),
+            )
+        else:
+            tts_adapter = smallest_adapter
     elif eleven_key:
         el_adapter = _ElevenLabsTTSAdapter(
             api_key=eleven_key, client=http,

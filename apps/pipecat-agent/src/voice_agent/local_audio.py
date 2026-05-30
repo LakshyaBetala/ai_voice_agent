@@ -498,13 +498,28 @@ def _build_deps(env: dict[str, str], http: httpx.AsyncClient) -> TurnDependencie
         llm_adapter = _GeminiAdapter(api_key=gemini_key, model=gemini_model, client=http)
 
     if smallest_key:
-        print(f"[TTS: smallest.ai {smallest_model} voice={smallest_voice} "
-              f"@ {smallest_rate}Hz (hi/en/ta, one voice)]")
-        tts_adapter = _SmallestTTSAdapter(
+        smallest_adapter = _SmallestTTSAdapter(
             api_key=smallest_key, client=http, voice=smallest_voice,
             model=smallest_model, sample_rate=smallest_rate, speed=smallest_speed,
             lang_hint=smallest_lang_hint,
         )
+        tamil_provider = env.get("SMALLEST_TAMIL_PROVIDER", "sarvam").strip().lower()
+        if tamil_provider == "sarvam" and sarvam_key:
+            print(f"[TTS: smallest.ai {smallest_voice} (hi/en) + Sarvam bulbul:v3 priya (ta)]")
+            tts_adapter = _HybridTTSAdapter(
+                primary=smallest_adapter,
+                tamil=_SarvamTTSAdapter(api_key=sarvam_key, client=http),
+            )
+        elif tamil_provider == "cartesia" and cartesia_key:
+            print(f"[TTS: smallest.ai {smallest_voice} (hi/en) + Cartesia nithya (ta)]")
+            tts_adapter = _HybridTTSAdapter(
+                primary=smallest_adapter,
+                tamil=_CartesiaTTSAdapter(api_key=cartesia_key, client=http, voice="nithya"),
+            )
+        else:
+            print(f"[TTS: smallest.ai {smallest_model} voice={smallest_voice} "
+                  f"@ {smallest_rate}Hz (hi/en/ta single voice)]")
+            tts_adapter = smallest_adapter
     elif eleven_key:
         if not eleven_voice:
             print("[warn] ELEVENLABS_VOICE_ID unset — using default (US accent). "
