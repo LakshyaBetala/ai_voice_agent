@@ -389,20 +389,54 @@ def _pain_hypothesis_for_turn(ctx, slots, lang: str) -> Optional[str]:
 
 
 _CLOSE_WORDS = [
+    # Send-it-on-WhatsApp (Hindi)
     "bhej do", "bhej de", "bhej dena", "bhej dijiye",
     "send karo", "send kar do", "send kar dena",
     "whatsapp karo", "whatsapp pe bhej", "whatsapp bhej",
     "quote bhejo", "quote bhej do",
-    "anuppunga", "anuppu", "send pannunga",
-    "theek hai", "okay done", "kar dijiye",
-    "bye", "thank you", "thanks", "bye bye",
+    # Send-it-on-WhatsApp (Tamil)
+    "anuppunga", "anuppu", "send pannunga", "whatsapp la anuppu",
+    "whatsapp la anuppunga", "quote anuppunga",
+    # Done / English bye
+    "okay done", "ok done", "kar dijiye", "kar dena",
+    "bye", "bye bye", "good bye", "goodbye", "see you",
+    "thank you", "thanks", "thank you bye", "thanks bye",
+    "alright then", "alright bye", "ok bye", "okay bye",
+    "ok thanks", "ok thank you", "good day", "have a good day",
+    # I'll-look-into-it (Hindi)
     "dekh leta", "dekh lunga", "dekhta hoon", "dekhti hoon",
+    "rakh leta", "rakh lunga", "phone rakhta", "phone rakhti",
+    "theek hai bye", "theek hai thanks", "theek hai done", "theek hai bhej",
+    # Enough / I'm leaving (Tamil — these were missed in the test call)
+    "podhum", "podhumda", "podhumaa", "podhumaachu", "podhum sarr",
+    "podhum sir", "podhum madam", "podhum mam", "podhum mem",
+    "ippo podhum", "ippa podhum",
+    "vidunga", "vidu", "vittu vidu", "vittu vidunga",
+    "varen", "vaaren", "naa varen", "naan vaaren",
+    "vechirukken", "vechikko",
+    "vendaam sarr", "vendam sarr", "vendam sir",
+    "namaskaram", "vanakkam sarr bye",
+    # I'll-go-now / let-it-go (Tamil + Malayalam observed in call)
+    "ippo poren", "appuram pesalam", "pesalam aprm", "later pesalam",
+    "podhum madam", "ippam pottu", "pottu vidu", "pottu vidunga",
+    "let it go", "let go", "leave it",
+    # Drop-it / never mind
+    "rehne do", "chodo", "chod do", "chhod do", "chhodo",
+    "skip karo", "skip kar do",
 ]
 _REJECT_WORDS = [
     "not interested", "interested nahi", "nahi chahiye", "nahin chahiye",
     "zaroorat nahi", "zarurat nahi", "zaroorat nahin", "mat karo",
-    "band karo", "rehne do", "interest nahi", "call mat", "pareshan mat",
-    "venam", "thevai illa",  # Tamil: don't want / not needed
+    "band karo", "interest nahi", "call mat", "pareshan mat",
+    # Tamil rejections (these were missed — lead told us pronunciation was bad
+    # and we treated it as a normal turn instead of a reject)
+    "venam", "vendam", "vendaam", "thevai illa", "thevai illai",
+    "puriyala mam", "puriyalai mam", "puriyala madam",
+    "tamil pesala", "tamilil pesala", "tamil-la pesala",
+    "tamil correct illa", "tamil illa",
+    "konjam kashtam", "konjam problem",
+    "kathru kathukka", "kathru kollunga",  # "go learn first"
+    "sari mam", "sorry mam", "sorry sarr",  # apologetic-end
 ]
 # Clearly wrong person / wrong number → end politely, no probe.
 _WRONG_WORDS = [
@@ -482,13 +516,20 @@ def classify_lead_intent(lead_text: str, conv) -> str:
     # listening, NOT asking to end the call. (Bug fix: these used to hang up.)
     if _is_backchannel(t):
         return "backchannel"
-    # Check clarify BEFORE close: "thoda dheere boliye" contains "boliye" which
-    # otherwise reads like a quote-send cue; same for re-ask phrases that touch
-    # close keywords by accident.
-    if any(w in t for w in _CLARIFY_WORDS):
-        return "clarify"
+    # Check close BEFORE clarify: "okay bye thanks" should hang up even though
+    # "ok" and "thanks" can read as soft acks. Close cues are decisive.
     if any(w in t for w in _CLOSE_WORDS):
         return "close"
+    # Check reject BEFORE clarify when the utterance is "long": when a lead
+    # MONOLOGUES about how bad Tamil pronunciation is and also says "puriyala",
+    # the dominant signal is reject (they want out), not "please rephrase".
+    # Short utterances containing clarify markers stay clarify (a real re-ask).
+    word_count = len([w for w in t.split() if w])
+    has_reject = any(w in t for w in _REJECT_WORDS)
+    if has_reject and word_count >= 6:
+        return "reject"
+    if any(w in t for w in _CLARIFY_WORDS):
+        return "clarify"
     if any(w in t for w in _OFFTOPIC_WORDS):
         return "offtopic"
     if any(w in t for w in _REJECT_WORDS):

@@ -40,6 +40,7 @@ from .exotel_transport import (
     StreamMediaFrame,
     StreamStartFrame,
     StreamStopFrame,
+    hangup_call,
     place_outbound_call,
 )
 from .pipeline import HARD_CAP_SECONDS, CallContext, make_initial_context
@@ -108,6 +109,10 @@ class _ActiveCall:
     # ring". Falls back to live synth on connect if not ready in time.
     intro_audio: bytes | None = None
     intro_text: str | None = None
+    # Exotel's CallSid for this call leg, set after place_outbound_call returns.
+    # Needed to call Exotel REST hangup explicitly when the agent decides to
+    # end (otherwise closing only the WS can leave the phone line open).
+    exotel_call_sid: str | None = None
 
 
 _active_calls: dict[str, _ActiveCall] = {}
@@ -351,6 +356,7 @@ async def trigger_outbound_call(req: PlaceCallRequest) -> PlaceCallResponse:
         _active_calls.pop(call_id, None)
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"exotel: {exc}") from exc
 
+    active.exotel_call_sid = resp.call_sid
     return PlaceCallResponse(
         call_sid=resp.call_sid, status=resp.status, flow_url=flow_url
     )
@@ -596,12 +602,33 @@ async def exotel_stream(ws: WebSocket, call_id: str) -> None:
             barge_voiced_ms = 0
 
             if turn_end_call:
-                # Let the goodbye line finish playing, then hang up by
-                # closing the WS (Exotel ends the call on disconnect).
+                # Let the goodbye line finish playing, then drop the call.
+                # Closing only the WS isn't enough in some Voicebot-applet
+                # flows — Exotel may keep the carrier leg open. Hit the REST
+                # hangup endpoint to drop the phone line explicitly.
                 wait = speaking_until - time.monotonic()
                 if wait > 0:
                     await asyncio.sleep(wait + 0.3)
                 logger.info("call_id=%s hanging up (end_call)", call_id)
+                try:
+                    sid = os.environ.get("EXOTEL_SID", "")
+                    api_key = os.environ.get("EXOTEL_API_KEY", "")
+                    api_token = os.environ.get("EXOTEL_API_TOKEN", "")
+                    region = os.environ.get("EXOTEL_REGION", "in")
+                    if active.exotel_call_sid and sid and api_key and api_token:
+                        await hangup_call(
+                            call_sid=active.exotel_call_sid,
+                            account_sid=sid,
+                            api_key=api_key,
+                            api_token=api_token,
+                            region=region,
+                        )
+                        logger.info(
+                            "call_id=%s exotel hangup sent (call_sid=%s)",
+                            call_id, active.exotel_call_sid,
+                        )
+                except Exception:
+                    logger.exception("exotel hangup failed (continuing to WS close)")
                 break
 
             if active.ctx.should_hard_stop():

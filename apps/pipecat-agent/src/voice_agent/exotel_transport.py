@@ -166,6 +166,49 @@ async def place_outbound_call(
     )
 
 
+async def hangup_call(
+    *,
+    call_sid: str,
+    account_sid: str,
+    api_key: str,
+    api_token: str,
+    region: str | None = None,
+    client: httpx.AsyncClient | None = None,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+) -> None:
+    """End an in-progress call via Exotel REST.
+
+    DELETE /v1/Accounts/{sid}/Calls/{CallSid}.json marks the call completed
+    on Exotel's side and drops the carrier leg. Without this, closing only
+    the WebSocket from our side can leave the phone line open in some
+    Voicebot-applet flows — the lead hears silence instead of a clean hangup.
+
+    Best-effort: log and swallow errors so a failed REST hangup doesn't
+    crash the WS handler. The WebSocket close still happens regardless.
+    """
+    if not call_sid or not account_sid or not api_key or not api_token:
+        return
+    base = base_url_for_region(region)
+    url = f"{base}/v1/Accounts/{account_sid}/Calls/{call_sid}.json"
+    auth = httpx.BasicAuth(api_key, api_token)
+    owns_client = client is None
+    http = client or httpx.AsyncClient(timeout=timeout)
+    try:
+        resp = await http.delete(url, auth=auth, timeout=timeout)
+        if resp.status_code >= 400:
+            # Some accounts only support POST-with-Status=completed; try that fallback.
+            resp = await http.post(
+                url, data={"Status": "completed"}, auth=auth, timeout=timeout,
+            )
+            if resp.status_code >= 400:
+                raise ExotelError(
+                    f"Exotel hangup {resp.status_code}: {resp.text[:200]}"
+                )
+    finally:
+        if owns_client:
+            await http.aclose()
+
+
 # -- WebSocket: bidirectional audio stream ---------------------------------
 
 class WebSocketLike(Protocol):
